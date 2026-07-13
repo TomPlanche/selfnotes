@@ -1,0 +1,20 @@
+[package]
+authors = ["Tom Planche <tomplanche@proton.me>"]
+categories = ["command-line-utilities"]
+description = "A simple CLI tool to help you with your notes."
+edition = "2024"
+homepage = "https://github.com/tomplanche/selfnotes"
+keywords = ["cli", "notes", "helper"]
+license = "Apache-2.0 OR MIT"
+name = "selfnotes"
+readme = "README.md"
+version = "0.1.0"
+
+[dependencies]
+anyhow = "1.0.103"
+chrono = "0.4.45"
+clap = { version = "4.6.1", features = ["derive"] }
+dialoguer = "0.12.0"
+dirs = "6.0.0"
+serde = { version = "1.0.228", features = ["derive"] }
+toml = "1.1.2"
