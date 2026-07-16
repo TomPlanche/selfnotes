@@ -124,7 +124,7 @@ fn prompt_fields(folder: &FolderConfig) -> Result<Vec<(String, String)>> {
     let mut values = Vec::with_capacity(folder.fields.len());
     let theme = ColorfulTheme::default();
 
-    for field in &folder.fields {
+    for field in folder.ordered_fields() {
         let prompt = field.prompt.as_deref().unwrap_or(&field.name);
         let input = Input::<String>::with_theme(&theme)
             .with_prompt(prompt)

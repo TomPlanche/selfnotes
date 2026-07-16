@@ -74,6 +74,36 @@ pub struct FolderConfig {
     /// Custom fields prompted for when creating an entry and exposed to the template as `{{<folder-name>.<field>}}`.
     #[serde(default)]
     pub fields: Vec<TemplateField>,
+    /// Explicit prompt arrangement by field name. Names listed here are prompted first, in this order; any field not
+    /// listed follows in declaration order. Unknown names are ignored.
+    #[serde(default)]
+    pub field_order: Vec<String>,
+}
+
+impl FolderConfig {
+    /// Fields in the order they should be prompted: names listed in `field_order` first (in that order), then any
+    /// remaining fields in declaration order. Unknown or repeated names in `field_order` are ignored.
+    pub fn ordered_fields(&self) -> Vec<&TemplateField> {
+        let mut ordered = Vec::with_capacity(self.fields.len());
+        let mut used = vec![false; self.fields.len()];
+
+        for name in &self.field_order {
+            if let Some(idx) = self.fields.iter().position(|field| &field.name == name)
+                && !used[idx]
+            {
+                used[idx] = true;
+                ordered.push(&self.fields[idx]);
+            }
+        }
+
+        for (idx, field) in self.fields.iter().enumerate() {
+            if !used[idx] {
+                ordered.push(field);
+            }
+        }
+
+        ordered
+    }
 }
 
 /// A custom, per-folder template field.
@@ -394,5 +424,68 @@ mod tests {
         let config = Config::default();
 
         assert_eq!(config.journal_format(), DEFAULT_FORMAT);
+    }
+
+    #[test]
+    fn folder_fields_keep_declaration_order() {
+        // Fields are prompted in the order they appear, so parsing must
+        // preserve their declaration order.
+        let toml = "\
+[[custom_folders]]
+name = \"ticket\"
+
+[[custom_folders.fields]]
+name = \"priority\"
+
+[[custom_folders.fields]]
+name = \"assignee\"
+
+[[custom_folders.fields]]
+name = \"due\"
+";
+
+        let config: Config = toml::from_str(toml).unwrap();
+        let names: Vec<&str> = config
+            .folder("ticket")
+            .unwrap()
+            .fields
+            .iter()
+            .map(|field| field.name.as_str())
+            .collect();
+
+        assert_eq!(names, ["priority", "assignee", "due"]);
+    }
+
+    #[test]
+    fn field_order_arranges_then_appends_the_rest() {
+        let folder = FolderConfig {
+            name: "ticket".into(),
+            fields: vec![
+                TemplateField {
+                    name: "priority".into(),
+                    ..TemplateField::default()
+                },
+                TemplateField {
+                    name: "assignee".into(),
+                    ..TemplateField::default()
+                },
+                TemplateField {
+                    name: "due".into(),
+                    ..TemplateField::default()
+                },
+            ],
+            // Arrange two explicitly; an unknown name is ignored, and the
+            // unlisted `due` falls through in declaration order.
+            field_order: vec!["assignee".into(), "nope".into(), "priority".into()],
+            ..FolderConfig::default()
+        };
+
+        let names: Vec<&str> = folder
+            .ordered_fields()
+            .iter()
+            .map(|field| field.name.as_str())
+            .collect();
+
+        assert_eq!(names, ["assignee", "priority", "due"]);
     }
 }

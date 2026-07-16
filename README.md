@@ -139,7 +139,22 @@ Priority: {{ticket.priority}}
 Assignee: {{ticket.assignee}}
 ```
 
-Fields are prompted in declaration order. An empty answer is allowed, and an unresolved `{{<folder-name>.<field>}}` is left untouched like any other unknown placeholder.
+Fields are prompted in declaration order by default. An empty answer is allowed, and an unresolved `{{<folder-name>.<field>}}` is left untouched like any other unknown placeholder.
+
+To arrange the prompts independently of how the blocks are written, add a `field_order` list on the folder. Names listed there are prompted first, in that order; any field not listed follows in declaration order, and unknown names are ignored:
+
+```toml
+[[custom_folders]]
+name = "ticket"
+field_order = ["assignee", "priority"]   # `due` (unlisted) is prompted last
+
+[[custom_folders.fields]]
+name = "priority"
+[[custom_folders.fields]]
+name = "assignee"
+[[custom_folders.fields]]
+name = "due"
+```
 
 ## Templates
 
