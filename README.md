@@ -59,12 +59,26 @@ Creating an entry never overwrites an existing file: if the target already exist
 
 ## Configuration
 
-Two layers are merged, with the local layer overriding the global one:
+Configuration is merged from up to three layers, each overriding the previous:
 
 - Global: `~/.config/selfnotes/config.toml` (platform config directory).
+- Overrides: path-scoped config files declared in the global config (see below).
 - Local: the nearest `.selfnotes.toml` found by walking up from the current directory.
 
-Scalar keys (`journal_root`, `format`, `editor`) and the `[journal]` section are merged field by field. Each `[[custom_folders]]` entry is matched by `name`: a local entry with the same name replaces the global one, and any new names are appended.
+Scalar keys (`journal_root`, `format`, `editor`) and the `[journal]` section are merged field by field. Each `[[custom_folders]]` entry is matched by `name`: a later entry with the same name replaces the earlier one, and any new names are appended.
+
+### Path-scoped overrides
+
+The global config can declare `[[overrides]]` entries, each pairing a glob `path` with a `config` file. When the current working directory matches the glob, that config is layered on top of the global config (but below any local `.selfnotes.toml`). This lets a whole directory tree pick up its own defaults without a `.selfnotes.toml` in each project.
+
+```toml
+[[overrides]]
+# When run anywhere under /Affluences, layer in the referenced config.
+path = "/Affluences/**"
+config = "/Affluences/afl-notes/selfnotes.config"
+```
+
+A leading `~` is expanded in both `path` and `config`, and `**` matches across directory separators. Overrides are applied in declaration order, and a referenced file that does not exist is skipped.
 
 ### Example
 

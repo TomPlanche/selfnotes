@@ -1,12 +1,14 @@
 //! Configuration loading and merging.
 //!
-//! Two layers are supported: a global config at
-//! `~/.config/selfnotes/config.toml` and a local `.selfnotes.toml` found by walking up from the current directory.
-//! Local values override global ones.
+//! Up to three layers are merged, each overriding the previous: a global config
+//! at `~/.config/selfnotes/config.toml`, any path-scoped `[[overrides]]` from the
+//! global config whose glob matches the working directory, and a local
+//! `.selfnotes.toml` found by walking up from the current directory.
 
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use glob::Pattern;
 use serde::{Deserialize, Serialize};
 
 /// File name used for local, per-project configuration.
@@ -29,6 +31,23 @@ pub struct Config {
     /// User-defined folders, selected by name from the command line.
     #[serde(default)]
     pub custom_folders: Vec<FolderConfig>,
+    /// Path-scoped config overrides. When the working directory matches an
+    /// entry's glob, the referenced config is layered on top of the global
+    /// config (but below any local `.selfnotes.toml`). Only meaningful in the
+    /// global config.
+    #[serde(default)]
+    pub overrides: Vec<Override>,
+}
+
+/// A path-scoped override that points at an extra config file.
+#[derive(Debug, Default, Clone, Deserialize, Serialize)]
+pub struct Override {
+    /// Glob pattern matched against the current working directory. A leading
+    /// `~` is expanded, and `**` matches across directory separators.
+    pub path: String,
+    /// Path to the config file layered on top of the global config when the
+    /// pattern matches. A leading `~` is expanded.
+    pub config: String,
 }
 
 /// Settings for the built-in journal.
@@ -138,13 +157,55 @@ pub fn load() -> Result<Config> {
         config.overlay(global);
     }
 
-    if let Some(local_path) = find_local_config(std::env::current_dir()?)?
+    // Path-scoped overrides sit between the global and local layers: they
+    // refine the global config for the current directory, but a local
+    // `.selfnotes.toml` still wins.
+    let cwd = std::env::current_dir()?;
+    apply_overrides(&mut config, &cwd)?;
+
+    if let Some(local_path) = find_local_config(cwd)?
         && let Some(local) = read_config_file(&local_path)?
     {
         config.overlay(local);
     }
 
     Ok(config)
+}
+
+/// Overlay every override config whose glob matches `cwd`, in declaration order.
+///
+/// A missing referenced file is skipped so a stale override never breaks a run.
+fn apply_overrides(config: &mut Config, cwd: &Path) -> Result<()> {
+    // Take the list out so we can overlay into `config` without aliasing it;
+    // overlaying never touches `overrides`, so it stays empty meanwhile.
+    let overrides = std::mem::take(&mut config.overrides);
+
+    for path in matching_override_paths(&overrides, cwd)? {
+        if let Some(scoped) = read_config_file(&path)? {
+            config.overlay(scoped);
+        }
+    }
+
+    config.overrides = overrides;
+
+    Ok(())
+}
+
+/// Resolve, in order, the config-file paths of the overrides matching `cwd`.
+fn matching_override_paths(overrides: &[Override], cwd: &Path) -> Result<Vec<PathBuf>> {
+    let mut paths = Vec::new();
+
+    for entry in overrides {
+        let pattern = expand_tilde(&entry.path);
+        let pattern = Pattern::new(&pattern.to_string_lossy())
+            .with_context(|| format!("invalid override glob `{}`", entry.path))?;
+
+        if pattern.matches_path(cwd) {
+            paths.push(expand_tilde(&entry.config));
+        }
+    }
+
+    Ok(paths)
 }
 
 /// Path to the global config file, if a config directory can be determined.
@@ -292,6 +353,26 @@ mod tests {
             Some("local-tickets")
         );
         assert!(global.folder("idea").is_some());
+    }
+
+    #[test]
+    fn overrides_match_by_glob_in_order() {
+        let overrides = vec![
+            Override {
+                path: "/Affluences/**".into(),
+                config: "/Affluences/afl-notes/selfnotes.config".into(),
+            },
+            Override {
+                path: "/Other/**".into(),
+                config: "/other.toml".into(),
+            },
+        ];
+
+        let matched = matching_override_paths(&overrides, Path::new("/Affluences/afl-notes")).unwrap();
+        assert_eq!(matched, vec![PathBuf::from("/Affluences/afl-notes/selfnotes.config")]);
+
+        let none = matching_override_paths(&overrides, Path::new("/elsewhere")).unwrap();
+        assert!(none.is_empty());
     }
 
     #[test]
