@@ -487,6 +487,26 @@ mod tests {
     }
 
     #[test]
+    fn expand_tilde_resolves_home_prefixed_paths() {
+        let Some(home) = dirs::home_dir() else {
+            // No home directory to expand against; nothing to assert.
+            return;
+        };
+
+        assert_eq!(expand_tilde("~"), home);
+        assert_eq!(expand_tilde("~/notes/journal"), home.join("notes/journal"));
+    }
+
+    #[test]
+    fn expand_tilde_leaves_other_paths_untouched() {
+        // Absolute and relative paths pass through verbatim.
+        assert_eq!(expand_tilde("/etc/passwd"), PathBuf::from("/etc/passwd"));
+        assert_eq!(expand_tilde("notes/journal"), PathBuf::from("notes/journal"));
+        // A bare `~` is only expanded when it is the whole path or a `~/` prefix, not `~user`.
+        assert_eq!(expand_tilde("~user/notes"), PathBuf::from("~user/notes"));
+    }
+
+    #[test]
     fn folder_fields_keep_declaration_order() {
         // Fields are prompted in the order they appear, so parsing must
         // preserve their declaration order.

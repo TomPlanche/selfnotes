@@ -304,4 +304,93 @@ mod tests {
         assert!(ensure_within_root(root, Path::new("/home/u/notes/../../secret.md")).is_err());
         assert!(ensure_within_root(root, Path::new("/etc/passwd")).is_err());
     }
+
+    #[test]
+    fn folder_dir_uses_path_when_set() {
+        let root = Path::new("/home/u/notes");
+        let folder = FolderConfig {
+            name: "ticket".into(),
+            path: Some("tickets".into()),
+            ..FolderConfig::default()
+        };
+
+        assert_eq!(folder_dir_in(root, &folder).unwrap(), root.join("tickets"));
+    }
+
+    #[test]
+    fn folder_dir_falls_back_to_name() {
+        let root = Path::new("/home/u/notes");
+        let folder = FolderConfig {
+            name: "idea".into(),
+            path: None,
+            ..FolderConfig::default()
+        };
+
+        assert_eq!(folder_dir_in(root, &folder).unwrap(), root.join("idea"));
+    }
+
+    #[test]
+    fn folder_dir_rejects_escaping_path() {
+        let root = Path::new("/home/u/notes");
+        let folder = FolderConfig {
+            name: "ticket".into(),
+            path: Some("../../secret".into()),
+            ..FolderConfig::default()
+        };
+
+        assert!(folder_dir_in(root, &folder).is_err());
+    }
+
+    #[test]
+    fn entry_args_without_cursor_is_just_the_path() {
+        let config = Config::default();
+        let path = Path::new("/home/u/notes/2026/07/17.md");
+
+        assert_eq!(
+            entry_args(&config, path, None),
+            vec![path.to_string_lossy().into_owned()]
+        );
+    }
+
+    #[test]
+    fn entry_args_expands_the_default_cursor_format() {
+        // No `cursor_format` set, so the zed / VS Code default `{path}:{line}:{column}` applies.
+        let config = Config::default();
+        let path = Path::new("/home/u/notes/a.md");
+        let cursor = Cursor { line: 12, column: 5 };
+
+        assert_eq!(
+            entry_args(&config, path, Some(&cursor)),
+            vec!["/home/u/notes/a.md:12:5"]
+        );
+    }
+
+    #[test]
+    fn entry_args_splits_multi_argument_cursor_formats() {
+        // vim's `+{line} {path}` becomes two arguments after the whitespace split.
+        let config = Config {
+            cursor_format: Some("+{line} {path}".into()),
+            ..Config::default()
+        };
+        let path = Path::new("/home/u/notes/a.md");
+        let cursor = Cursor { line: 3, column: 1 };
+
+        assert_eq!(
+            entry_args(&config, path, Some(&cursor)),
+            vec!["+3", "/home/u/notes/a.md"]
+        );
+    }
+
+    #[test]
+    fn entry_args_keeps_a_spaced_path_in_one_argument() {
+        // The split is on the *format's* whitespace, not the path's, so a path with spaces stays a single argument.
+        let config = Config::default();
+        let path = Path::new("/home/u/my notes/a.md");
+        let cursor = Cursor { line: 1, column: 1 };
+
+        assert_eq!(
+            entry_args(&config, path, Some(&cursor)),
+            vec!["/home/u/my notes/a.md:1:1"]
+        );
+    }
 }
