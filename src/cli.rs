@@ -46,6 +46,8 @@ pub enum Command {
 pub enum ConfigAction {
     /// Show resolved config file locations and effective values.
     Path,
+    /// Check the effective configuration for problems (bad paths, missing templates, ...).
+    Validate,
     /// Open a config file in your editor, creating it if needed.
     Open,
     /// Print a single configuration value.

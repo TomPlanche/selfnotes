@@ -69,11 +69,18 @@ pub fn create_folder_entry(
 ///
 /// Errors if the directory escapes the journal root, so callers can validate before prompting the user for anything.
 pub fn folder_dir(config: &Config, folder: &FolderConfig) -> Result<PathBuf> {
-    let root = config.resolved_journal_root()?;
+    folder_dir_in(&config.resolved_journal_root()?, folder)
+}
+
+/// Resolve a folder's directory under an explicit `root`, validating it stays inside.
+///
+/// Like [`folder_dir`] but with the root supplied directly, so a config layer whose own `journal_root` is unset can
+/// still be checked against the effective root during validation.
+pub fn folder_dir_in(root: &Path, folder: &FolderConfig) -> Result<PathBuf> {
     let sub = folder.path.as_deref().unwrap_or(&folder.name);
     let dir = root.join(sub);
 
-    ensure_within_root(&root, &dir)?;
+    ensure_within_root(root, &dir)?;
 
     Ok(dir)
 }

@@ -41,6 +41,7 @@ selfnotes new ticket login-bug   # pass both directly
 selfnotes new ticket login-bug --no-open
 
 selfnotes config path         # show config locations and effective values
+selfnotes config validate     # check the effective config for problems
 selfnotes config get journal-root
 selfnotes config set journal-root ~/notes
 selfnotes config set format md
@@ -109,6 +110,16 @@ name = "idea"
 ```
 
 Running `selfnotes new` with no folder shows a picker of the configured folder names (via `dialoguer`), then prompts for the entry name.
+
+### Validating the configuration
+
+`selfnotes config validate` checks every config file that contributes to the effective configuration and prints a verdict (`valid` / `INVALID`) per file, with each problem attributed to the file it came from. It exits non-zero when any file is invalid, so it fits in scripts and pre-flight checks. The blocking problems are: an unset `journal_root`, a custom folder whose directory would escape the journal root (via its `path` or a name containing `..`), a folder `name` containing a path separator (`/` or `\`), and a referenced `template_file` (journal or folder) that does not exist. A `field_order` entry naming a field that no field declares is reported as a warning rather than an error.
+
+Each file is judged on what actually takes effect: a folder or journal template shadowed by a higher-priority layer is not re-checked, and folder directories are resolved against the effective journal root even when a given file does not set its own root. The set of files checked mirrors what loading merges: the global config, each matching override's referenced config, and the nearest local `.selfnotes.toml`.
+
+The command also inspects the `[[overrides]]` declared in each config file. An invalid glob is an error. For an override in the global config, it reports whether the glob matches the current directory and checks the referenced config file exists (an error when the override matches here, a warning otherwise); the referenced config's own folders and templates are validated as one of the checked files. An override declared in a local config is reported as ignored, since only the global config's overrides are applied, along with whether its glob would even have matched, which is the usual reason such an override looks like it does nothing.
+
+Entry names are held to the same rule at creation time: a `name` containing a path separator, `..`, or an absolute path is rejected before anything is written, so an entry can never be created outside the journal root.
 
 ### Custom folder fields
 

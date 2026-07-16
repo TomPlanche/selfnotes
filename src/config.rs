@@ -165,6 +165,12 @@ impl Config {
                 None => self.custom_folders.push(folder),
             }
         }
+        // Carry overrides forward so `apply_overrides` can act on the global config's declarations. Overrides are only
+        // honored from the global config (applied between the global and local layers), so a later layer replaces
+        // rather than merges them.
+        if !other.overrides.is_empty() {
+            self.overrides = other.overrides;
+        }
     }
 
     /// Find a configured folder by its name.
@@ -288,8 +294,18 @@ pub fn find_local_config(start: &Path) -> Option<PathBuf> {
     None
 }
 
+/// Whether an override's glob matches `dir`. A leading `~` is expanded and `**` spans separators. Errors when the
+/// glob is invalid.
+pub fn override_matches(entry: &Override, dir: &Path) -> Result<bool> {
+    let pattern = expand_tilde(&entry.path);
+    let pattern =
+        Pattern::new(&pattern.to_string_lossy()).with_context(|| format!("invalid override glob `{}`", entry.path))?;
+
+    Ok(pattern.matches_path(dir))
+}
+
 /// Read and parse a config file, returning `None` if it does not exist.
-fn read_config_file(path: &Path) -> Result<Option<Config>> {
+pub fn read_config_file(path: &Path) -> Result<Option<Config>> {
     if !path.exists() {
         return Ok(None);
     }
@@ -431,6 +447,36 @@ mod tests {
 
         let none = matching_override_paths(&overrides, Path::new("/elsewhere")).unwrap();
         assert!(none.is_empty());
+    }
+
+    #[test]
+    fn overlay_carries_global_overrides_forward() {
+        // Regression: `overlay` must propagate `overrides` so `apply_overrides` can act on the global declarations.
+        let mut config = Config::default();
+        let global = Config {
+            overrides: vec![Override {
+                path: "/Affluences/**".into(),
+                config: "/tmp/afl.toml".into(),
+            }],
+            ..Config::default()
+        };
+
+        config.overlay(global);
+
+        assert_eq!(config.overrides.len(), 1);
+        assert_eq!(config.overrides[0].path, "/Affluences/**");
+    }
+
+    #[test]
+    fn override_matches_respects_the_glob() {
+        let entry = Override {
+            path: "/Affluences/**".into(),
+            config: "/tmp/afl.toml".into(),
+        };
+
+        assert!(override_matches(&entry, Path::new("/Affluences/afl-notes")).unwrap());
+        // A different tree does not match: `/Users/.../Affluences` is not under `/Affluences`.
+        assert!(!override_matches(&entry, Path::new("/Users/tom/Affluences")).unwrap());
     }
 
     #[test]
