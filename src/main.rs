@@ -89,7 +89,7 @@ fn maybe_open(config: &Config, entry: &Entry, no_open: bool) {
         },
     };
 
-    if let Err(err) = entry::open_in_editor(config, &root, &entry.path) {
+    if let Err(err) = entry::open_in_editor(config, &root, &entry.path, entry.cursor.as_ref()) {
         eprintln!("warning: could not open editor: {err:#}");
     }
 }
@@ -168,6 +168,7 @@ fn run_config(action: ConfigAction) -> Result<()> {
             );
             println!("  format       = {}", merged.journal_format());
             println!("  editor       = {}", merged.editor.as_deref().unwrap_or("<unset>"));
+            println!("  cursor-format = {}", merged.cursor_format());
         },
         ConfigAction::Get { key } => {
             let config = config::load()?;
@@ -176,6 +177,7 @@ fn run_config(action: ConfigAction) -> Result<()> {
                 "journal-root" => config.journal_root.clone(),
                 "format" => Some(config.journal_format().to_string()),
                 "editor" => config.editor.clone(),
+                "cursor-format" => Some(config.cursor_format().to_string()),
                 other => bail!("unknown config key `{other}`"),
             };
 
@@ -191,6 +193,7 @@ fn run_config(action: ConfigAction) -> Result<()> {
                 "journal-root" => config.journal_root = Some(value),
                 "format" => config.format = Some(value),
                 "editor" => config.editor = Some(value),
+                "cursor-format" => config.cursor_format = Some(value),
                 other => bail!("unknown config key `{other}`"),
             }
 

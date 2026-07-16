@@ -17,6 +17,9 @@ pub const LOCAL_CONFIG_NAME: &str = ".selfnotes.toml";
 /// Default file extension used when none is configured.
 pub const DEFAULT_FORMAT: &str = "md";
 
+/// Default cursor-position format, matching zed / VS Code (`-g`) syntax.
+pub const DEFAULT_CURSOR_FORMAT: &str = "{path}:{line}:{column}";
+
 /// Top-level configuration, deserialized from TOML.
 #[derive(Debug, Default, Clone, Deserialize, Serialize)]
 pub struct Config {
@@ -26,15 +29,18 @@ pub struct Config {
     pub format: Option<String>,
     /// Editor command used by `--open` (falls back to `$EDITOR`).
     pub editor: Option<String>,
+    /// Editor cursor-position format for a `{{cursor}}` marker. Supports `{path}`, `{line}`, and `{column}`; split on
+    /// whitespace into arguments.
+    /// Defaults to `{path}:{line}:{column}` (zed / VS Code style).
+    pub cursor_format: Option<String>,
     /// Journal-specific settings.
     pub journal: Option<JournalConfig>,
     /// User-defined folders, selected by name from the command line.
     #[serde(default)]
     pub custom_folders: Vec<FolderConfig>,
-    /// Path-scoped config overrides. When the working directory matches an
-    /// entry's glob, the referenced config is layered on top of the global
-    /// config (but below any local `.selfnotes.toml`). Only meaningful in the
-    /// global config.
+    /// Path-scoped config overrides. When the working directory matches an entry's glob, the referenced config is
+    /// layered on top of the global config (but below any local `.selfnotes.toml`). Only meaningful in the global
+    /// config.
     #[serde(default)]
     pub overrides: Vec<Override>,
 }
@@ -42,11 +48,11 @@ pub struct Config {
 /// A path-scoped override that points at an extra config file.
 #[derive(Debug, Default, Clone, Deserialize, Serialize)]
 pub struct Override {
-    /// Glob pattern matched against the current working directory. A leading
-    /// `~` is expanded, and `**` matches across directory separators.
+    /// Glob pattern matched against the current working directory. A leading `~` is expanded, and `**` matches across
+    /// directory separators.
     pub path: String,
-    /// Path to the config file layered on top of the global config when the
-    /// pattern matches. A leading `~` is expanded.
+    /// Path to the config file layered on top of the global config when the pattern matches. A leading `~` is
+    /// expanded.
     pub config: String,
 }
 
@@ -132,6 +138,10 @@ impl Config {
             self.editor = other.editor;
         }
 
+        if other.cursor_format.is_some() {
+            self.cursor_format = other.cursor_format;
+        }
+
         if let Some(other_journal) = other.journal {
             let journal = self.journal.get_or_insert_with(JournalConfig::default);
 
@@ -189,6 +199,11 @@ impl Config {
             .or(self.format.as_deref())
             .unwrap_or(DEFAULT_FORMAT)
     }
+
+    /// Effective editor cursor-position format.
+    pub fn cursor_format(&self) -> &str {
+        self.cursor_format.as_deref().unwrap_or(DEFAULT_CURSOR_FORMAT)
+    }
 }
 
 /// Load and merge the global and local configuration layers.
@@ -201,9 +216,8 @@ pub fn load() -> Result<Config> {
         config.overlay(global);
     }
 
-    // Path-scoped overrides sit between the global and local layers: they
-    // refine the global config for the current directory, but a local
-    // `.selfnotes.toml` still wins.
+    // Path-scoped overrides sit between the global and local layers: they refine the global config for the current
+    // directory, but a local `.selfnotes.toml` still wins.
     let cwd = std::env::current_dir()?;
     apply_overrides(&mut config, &cwd)?;
 

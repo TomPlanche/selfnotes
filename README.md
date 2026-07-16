@@ -45,6 +45,7 @@ selfnotes config get journal-root
 selfnotes config set journal-root ~/notes
 selfnotes config set format md
 selfnotes config set editor "zed"
+selfnotes config set cursor-format "{path}:{line}:{column}"
 ```
 
 By default, creating an entry opens it in your editor. The editor is invoked with two arguments, the journal root and the entry file, so an editor like `zed` opens the whole notes workspace and focuses the file:
@@ -187,3 +188,31 @@ Wrap part of a template in `{{?key}}...{{/key}}` to render it only when `key` is
 ```
 
 Any placeholder key works as the condition (custom fields, `{{name}}`, date parts). Blocks may nest, and an unbalanced `{{?key}}` with no matching `{{/key}}` is left untouched like any other unresolved placeholder.
+
+### Cursor position
+
+Place a `{{cursor}}` marker in a template to say where the editor's cursor should land. The marker is removed from the written file, and when the entry is opened, its line and column are handed to the editor.
+
+```markdown
+# {{name}}
+
+{{cursor}}
+```
+
+The editor argument is built from the `cursor_format` config key, which defaults to `{path}:{line}:{column}` (zed and VS Code with `-g`). It supports the `{path}`, `{line}`, and `{column}` placeholders and is split on whitespace into arguments, so multi-argument editors work too:
+
+```toml
+editor = "zed"
+# default:
+cursor_format = "{path}:{line}:{column}"
+
+# vim / nvim:
+# editor = "nvim"
+# cursor_format = "+{line} {path}"
+
+# VS Code:
+# editor = "code -g"
+# cursor_format = "{path}:{line}:{column}"
+```
+
+If a template has no `{{cursor}}` marker, the entry opens normally with no position argument. Only the first marker is used, and a marker inside a conditional block that is skipped has no effect.

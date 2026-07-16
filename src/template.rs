@@ -74,69 +74,122 @@ impl Context {
     }
 }
 
-/// Render `template`, replacing every `{{key}}` with its value and evaluating `{{?key}}...{{/key}}` conditional blocks
-/// (rendered only when `key` is set to  a non-empty value).
-///
-/// Unknown placeholders and unbalanced blocks are left untouched so mistakes stay visible.
-pub fn render(template: &str, ctx: &Context) -> String {
-    let mut output = String::with_capacity(template.len());
-
-    render_into(template, ctx, &mut output);
-
-    output
+/// A rendered template together with an optional cursor position.
+pub struct Rendered {
+    /// Rendered text, with any `{{cursor}}` marker removed.
+    pub content: String,
+    /// Position of the first rendered `{{cursor}}` marker, if the template had one.
+    pub cursor: Option<Cursor>,
 }
 
-/// Render `template` into `output`, recursing into conditional block bodies.
-fn render_into(template: &str, ctx: &Context, output: &mut String) {
-    let mut rest = template;
+/// A 1-based line/column position within rendered text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Cursor {
+    /// 1-based line number.
+    pub line: usize,
+    /// 1-based column, counted in characters from the start of the line.
+    pub column: usize,
+}
 
-    while let Some(open) = rest.find("{{") {
-        output.push_str(&rest[..open]);
-        let after_open = &rest[open + 2..];
+/// Render `template`, replacing every `{{key}}` with its value and evaluating `{{?key}}...{{/key}}` conditional blocks
+/// (rendered only when `key` is set to a non-empty value). A `{{cursor}}` marker is removed and its position reported
+/// in the result.
+///
+/// Unknown placeholders and unbalanced blocks are left untouched so mistakes stay visible.
+pub fn render(template: &str, ctx: &Context) -> Rendered {
+    let mut renderer = Renderer {
+        ctx,
+        output: String::with_capacity(template.len()),
+        cursor: None,
+    };
 
-        let Some(close) = after_open.find("}}") else {
-            // No closing braces: emit the remainder verbatim.
-            output.push_str("{{");
-            rest = after_open;
-            continue;
-        };
+    renderer.render(template);
 
-        let raw = &after_open[..close];
-        let tag = raw.trim();
-        let after_tag = &after_open[close + 2..];
+    let cursor = renderer.cursor.map(|offset| cursor_at(&renderer.output, offset));
 
-        if let Some(key) = tag.strip_prefix('?') {
-            // Conditional block: render its body only when the key is set.
-            let key = key.trim();
-
-            match find_block_end(after_tag) {
-                Some((body, remainder)) => {
-                    if ctx.is_set(key) {
-                        render_into(body, ctx, output);
-                    }
-                    rest = remainder;
-                },
-                None => {
-                    // Unbalanced open: preserve the original tag verbatim.
-                    push_tag(output, raw);
-                    rest = after_tag;
-                },
-            }
-        } else if tag.starts_with('/') {
-            // Stray close tag with no matching open: leave it intact.
-            push_tag(output, raw);
-            rest = after_tag;
-        } else {
-            match ctx.lookup(tag) {
-                Some(value) => output.push_str(&value),
-                // Preserve the original, unresolved placeholder.
-                None => push_tag(output, raw),
-            }
-            rest = after_tag;
-        }
+    Rendered {
+        content: renderer.output,
+        cursor,
     }
+}
 
-    output.push_str(rest);
+/// Rendering state: the growing output plus the byte offset of the first `{{cursor}}` marker, resolved to a line/column
+/// once rendering finishes.
+struct Renderer<'a> {
+    ctx: &'a Context,
+    output: String,
+    cursor: Option<usize>,
+}
+
+impl Renderer<'_> {
+    /// Render `template` into `self.output`, recursing into block bodies.
+    fn render(&mut self, template: &str) {
+        let mut rest = template;
+
+        while let Some(open) = rest.find("{{") {
+            self.output.push_str(&rest[..open]);
+            let after_open = &rest[open + 2..];
+
+            let Some(close) = after_open.find("}}") else {
+                // No closing braces: emit the remainder verbatim.
+                self.output.push_str("{{");
+                rest = after_open;
+                continue;
+            };
+
+            let raw = &after_open[..close];
+            let tag = raw.trim();
+            let after_tag = &after_open[close + 2..];
+
+            if let Some(key) = tag.strip_prefix('?') {
+                // Conditional block: render its body only when the key is set.
+                let key = key.trim();
+
+                match find_block_end(after_tag) {
+                    Some((body, remainder)) => {
+                        if self.ctx.is_set(key) {
+                            self.render(body);
+                        }
+                        rest = remainder;
+                    },
+                    None => {
+                        // Unbalanced open: preserve the original tag verbatim.
+                        push_tag(&mut self.output, raw);
+                        rest = after_tag;
+                    },
+                }
+            } else if tag.starts_with('/') {
+                // Stray close tag with no matching open: leave it intact.
+                push_tag(&mut self.output, raw);
+                rest = after_tag;
+            } else if tag == "cursor" {
+                // Record the first cursor marker; it renders as nothing.
+                if self.cursor.is_none() {
+                    self.cursor = Some(self.output.len());
+                }
+                rest = after_tag;
+            } else {
+                match self.ctx.lookup(tag) {
+                    Some(value) => self.output.push_str(&value),
+                    // Preserve the original, unresolved placeholder.
+                    None => push_tag(&mut self.output, raw),
+                }
+                rest = after_tag;
+            }
+        }
+
+        self.output.push_str(rest);
+    }
+}
+
+/// Resolve a byte `offset` into `content` to a 1-based line/column.
+fn cursor_at(content: &str, offset: usize) -> Cursor {
+    let before = &content[..offset];
+    let line = before.bytes().filter(|&byte| byte == b'\n').count() + 1;
+    let line_start = before.rfind('\n').map_or(0, |idx| idx + 1);
+    let column = content[line_start..offset].chars().count() + 1;
+
+    Cursor { line, column }
 }
 
 /// Emit `{{raw}}` verbatim, restoring the braces stripped during scanning.
@@ -187,6 +240,12 @@ mod tests {
             field_prefix: None,
             fields: Vec::new(),
         }
+    }
+
+    /// Convenience wrapper: most tests only assert on the rendered text.
+    /// Cursor-specific tests call `super::render` for the full `Rendered`.
+    fn render(template: &str, ctx: &Context) -> String {
+        super::render(template, ctx).content
     }
 
     #[test]
@@ -280,5 +339,43 @@ mod tests {
 
         // No matching close tag: the open tag is preserved verbatim.
         assert_eq!(render("{{?ticket.priority}}tail", &ctx), "{{?ticket.priority}}tail");
+    }
+
+    #[test]
+    fn records_cursor_position_and_strips_marker() {
+        let rendered = super::render("# {{name}}\n\n{{cursor}}", &fixed_ctx());
+
+        assert_eq!(rendered.content, "# login-bug\n\n");
+        assert_eq!(rendered.cursor, Some(Cursor { line: 3, column: 1 }));
+    }
+
+    #[test]
+    fn cursor_column_counts_characters_from_line_start() {
+        let rendered = super::render("Name: {{cursor}}here", &fixed_ctx());
+
+        assert_eq!(rendered.content, "Name: here");
+        assert_eq!(rendered.cursor, Some(Cursor { line: 1, column: 7 }));
+    }
+
+    #[test]
+    fn no_cursor_marker_yields_none() {
+        assert_eq!(super::render("# {{name}}", &fixed_ctx()).cursor, None);
+    }
+
+    #[test]
+    fn first_cursor_marker_wins() {
+        let rendered = super::render("a{{cursor}}b{{cursor}}c", &fixed_ctx());
+
+        assert_eq!(rendered.content, "abc");
+        assert_eq!(rendered.cursor, Some(Cursor { line: 1, column: 2 }));
+    }
+
+    #[test]
+    fn cursor_inside_skipped_block_is_ignored() {
+        let ctx = fixed_ctx().with_fields("ticket", vec![("priority".into(), String::new())]);
+
+        let rendered = super::render("{{?ticket.priority}}{{cursor}}{{/ticket.priority}}done", &ctx);
+        assert_eq!(rendered.content, "done");
+        assert_eq!(rendered.cursor, None);
     }
 }

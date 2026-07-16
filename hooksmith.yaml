@@ -1,0 +1,11 @@
+pre-commit:
+  commands:
+    - echo "Running pre-commit checks..."
+    - cargo fmt --all -- --check
+    - cargo clippy -- --deny warnings
+
+pre-push:
+  commands:
+    - echo "Running pre-push checks..."
+    - cargo test
+    - cargo build --release
