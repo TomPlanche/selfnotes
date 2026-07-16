@@ -173,3 +173,17 @@ Templates are plain files referenced by `template_file`. When no template is con
 | `{{<folder-name>.<field>}}` | `high` | custom folder fields, e.g. `{{ticket.priority}}` |
 
 Unknown placeholders are left untouched so typos stay visible.
+
+### Conditional blocks
+
+Wrap part of a template in `{{?key}}...{{/key}}` to render it only when `key` is set to a non-empty value. This is handy for optional custom fields: skip a whole line when the field is left blank.
+
+```markdown
+# {{name}}
+
+{{?ticket.priority}}Priority: {{ticket.priority}}
+{{/ticket.priority}}{{?ticket.assignee}}Assignee: {{ticket.assignee}}
+{{/ticket.assignee}}
+```
+
+Any placeholder key works as the condition (custom fields, `{{name}}`, date parts). Blocks may nest, and an unbalanced `{{?key}}` with no matching `{{/key}}` is left untouched like any other unresolved placeholder.
