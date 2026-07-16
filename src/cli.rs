@@ -52,12 +52,12 @@ pub enum ConfigAction {
     Open,
     /// Print a single configuration value.
     Get {
-        /// One of: journal-root, format, editor.
+        /// One of: journal-root, format, editor, cursor-format.
         key: String,
     },
     /// Set a value in the global configuration.
     Set {
-        /// One of: journal-root, format, editor.
+        /// One of: journal-root, format, editor, cursor-format.
         key: String,
         /// The value to store.
         value: String,

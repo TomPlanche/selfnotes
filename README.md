@@ -67,7 +67,7 @@ Configuration is merged from up to three layers, each overriding the previous:
 - Overrides: path-scoped config files declared in the global config (see below).
 - Local: the nearest `.selfnotes.toml` found by walking up from the current directory.
 
-Scalar keys (`journal_root`, `format`, `editor`) and the `[journal]` section are merged field by field. Each `[[custom_folders]]` entry is matched by `name`: a later entry with the same name replaces the earlier one, and any new names are appended.
+Scalar keys (`journal_root`, `format`, `editor`, `cursor_format`) and the `[journal]` section are merged field by field. Each `[[custom_folders]]` entry is matched by `name`: a later entry with the same name replaces the earlier one, and any new names are appended.
 
 ### Path-scoped overrides
 
