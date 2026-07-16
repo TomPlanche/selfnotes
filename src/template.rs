@@ -8,6 +8,11 @@ pub struct Context {
     pub now: DateTime<Local>,
     /// Entry name, used by custom folders (`{{name}}`).
     pub name: Option<String>,
+    /// Folder name under which `fields` are exposed, e.g. `ticket` makes a
+    /// field available as `{{ticket.<field>}}`.
+    pub field_prefix: Option<String>,
+    /// Custom folder fields, exposed as `{{<folder>.<field>}}`.
+    pub fields: Vec<(String, String)>,
 }
 
 impl Context {
@@ -16,6 +21,8 @@ impl Context {
         Self {
             now: Local::now(),
             name: None,
+            field_prefix: None,
+            fields: Vec::new(),
         }
     }
 
@@ -25,8 +32,28 @@ impl Context {
         self
     }
 
+    /// Attach custom folder fields, exposed as `{{<prefix>.<field>}}` where
+    /// `prefix` is the folder name.
+    pub fn with_fields(mut self, prefix: impl Into<String>, fields: Vec<(String, String)>) -> Self {
+        self.field_prefix = Some(prefix.into());
+        self.fields = fields;
+        self
+    }
+
     /// Resolve a placeholder key to its value, if known.
     fn lookup(&self, key: &str) -> Option<String> {
+        if let Some(prefix) = &self.field_prefix
+            && let Some(field) = key
+                .strip_prefix(prefix.as_str())
+                .and_then(|rest| rest.strip_prefix('.'))
+        {
+            return self
+                .fields
+                .iter()
+                .find(|(name, _)| name == field)
+                .map(|(_, value)| value.clone());
+        }
+
         let value = match key {
             "date" => self.now.format("%Y-%m-%d").to_string(),
             "datetime" => self.now.format("%Y-%m-%d %H:%M").to_string(),
@@ -88,6 +115,8 @@ mod tests {
         Context {
             now: Local.with_ymd_and_hms(2026, 7, 13, 9, 5, 0).unwrap(),
             name: Some("login-bug".into()),
+            field_prefix: None,
+            fields: Vec::new(),
         }
     }
 
@@ -112,8 +141,24 @@ mod tests {
         let ctx = Context {
             now: Local::now(),
             name: None,
+            field_prefix: None,
+            fields: Vec::new(),
         };
 
         assert_eq!(render("{{name}}", &ctx), "{{name}}");
+    }
+
+    #[test]
+    fn substitutes_folder_fields_under_folder_name() {
+        let ctx = fixed_ctx().with_fields("ticket", vec![("priority".into(), "high".into())]);
+
+        assert_eq!(render("Priority: {{ticket.priority}}", &ctx), "Priority: high");
+    }
+
+    #[test]
+    fn unknown_folder_field_is_left_intact() {
+        let ctx = fixed_ctx().with_fields("ticket", vec![("priority".into(), "high".into())]);
+
+        assert_eq!(render("{{ticket.missing}}", &ctx), "{{ticket.missing}}");
     }
 }

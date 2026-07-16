@@ -52,7 +52,9 @@ fn main() -> Result<()> {
                 bail!("entry name cannot be empty");
             }
 
-            let entry = entry::create_folder_entry(&config, &folder_config, name)?;
+            let fields = prompt_fields(&folder_config)?;
+
+            let entry = entry::create_folder_entry(&config, &folder_config, name, fields)?;
             report(&entry);
             maybe_open(&config, &entry, no_open);
         },
@@ -115,6 +117,31 @@ fn prompt_name() -> Result<String> {
         .with_prompt("Entry name")
         .interact_text()
         .context("reading entry name")
+}
+
+/// Prompt for each of a folder's custom fields, returning `(name, value)` pairs ready to hand to the template context.
+fn prompt_fields(folder: &FolderConfig) -> Result<Vec<(String, String)>> {
+    let mut values = Vec::with_capacity(folder.fields.len());
+    let theme = ColorfulTheme::default();
+
+    for field in &folder.fields {
+        let prompt = field.prompt.as_deref().unwrap_or(&field.name);
+        let input = Input::<String>::with_theme(&theme)
+            .with_prompt(prompt)
+            .allow_empty(true);
+        let input = match &field.default {
+            Some(default) => input.default(default.clone()),
+            None => input,
+        };
+
+        let value = input
+            .interact_text()
+            .with_context(|| format!("reading field `{}`", field.name))?;
+
+        values.push((field.name.clone(), value));
+    }
+
+    Ok(values)
 }
 
 /// Handle the `config` subcommand.

@@ -71,6 +71,20 @@ pub struct FolderConfig {
     pub template_file: Option<String>,
     /// Extension override for this folder's entries.
     pub format: Option<String>,
+    /// Custom fields prompted for when creating an entry and exposed to the template as `{{<folder-name>.<field>}}`.
+    #[serde(default)]
+    pub fields: Vec<TemplateField>,
+}
+
+/// A custom, per-folder template field.
+#[derive(Debug, Default, Clone, Deserialize, Serialize)]
+pub struct TemplateField {
+    /// Field key, used in templates as `{{<folder-name>.<name>}}`.
+    pub name: String,
+    /// Prompt shown when creating an entry; defaults to `name`.
+    pub prompt: Option<String>,
+    /// Default value pre-filled at the prompt.
+    pub default: Option<String>,
 }
 
 impl Config {

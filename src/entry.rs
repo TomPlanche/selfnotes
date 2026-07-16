@@ -38,14 +38,22 @@ pub fn create_journal(config: &Config) -> Result<Entry> {
 }
 
 /// Create an entry in a custom folder: `<root>/<folder.path>/<name>.<format>`.
-pub fn create_folder_entry(config: &Config, folder: &FolderConfig, name: &str) -> Result<Entry> {
+///
+/// `fields` are the resolved custom-field values, exposed to the template as
+/// `{{<folder-name>.<field>}}`.
+pub fn create_folder_entry(
+    config: &Config,
+    folder: &FolderConfig,
+    name: &str,
+    fields: Vec<(String, String)>,
+) -> Result<Entry> {
     let root = config.resolved_journal_root()?;
     let sub = folder.path.as_deref().unwrap_or(&folder.name);
     let dir = root.join(sub);
     let file_name = format!("{}.{}", name, config.folder_format(folder));
     let path = dir.join(file_name);
 
-    let ctx = Context::now().with_name(name);
+    let ctx = Context::now().with_name(name).with_fields(folder.name.as_str(), fields);
     let template = folder.template_file.as_deref();
     let default = "# {{name}}\n\n_Created {{datetime}}_\n\n";
 

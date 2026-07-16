@@ -109,6 +109,38 @@ name = "idea"
 
 Running `selfnotes new` with no folder shows a picker of the configured folder names (via `dialoguer`), then prompts for the entry name.
 
+### Custom folder fields
+
+A folder can declare `[[custom_folders.fields]]` entries. When you create an entry in that folder, you are prompted for each field, and the values are exposed to the template as `{{<folder-name>.<field>}}` (e.g. a `ticket` folder's `priority` field is `{{ticket.priority}}`).
+
+```toml
+[[custom_folders]]
+name = "ticket"
+path = "tickets"
+template_file = "~/.config/selfnotes/templates/ticket.md"
+
+[[custom_folders.fields]]
+name = "priority"
+# Optional prompt label (defaults to the field name).
+prompt = "Priority"
+# Optional value pre-filled at the prompt.
+default = "medium"
+
+[[custom_folders.fields]]
+name = "assignee"
+```
+
+With the template `ticket.md`:
+
+```markdown
+# {{name}}
+
+Priority: {{ticket.priority}}
+Assignee: {{ticket.assignee}}
+```
+
+Fields are prompted in declaration order. An empty answer is allowed, and an unresolved `{{<folder-name>.<field>}}` is left untouched like any other unknown placeholder.
+
 ## Templates
 
 Templates are plain files referenced by `template_file`. When no template is configured, a minimal built-in default is used. Both go through `{{placeholder}}` substitution:
@@ -123,5 +155,6 @@ Templates are plain files referenced by `template_file`. When no template is con
 | `{{day}}`      | `13`               | zero-padded                |
 | `{{weekday}}`  | `Monday`           |                            |
 | `{{name}}`     | `login-bug`        | custom-folder entries only |
+| `{{<folder-name>.<field>}}` | `high` | custom folder fields, e.g. `{{ticket.priority}}` |
 
 Unknown placeholders are left untouched so typos stay visible.
