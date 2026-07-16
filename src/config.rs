@@ -125,7 +125,7 @@ pub struct TemplateField {
 
 impl Config {
     /// Overlay `other` (higher priority) onto `self`, mutating in place.
-    fn overlay(&mut self, other: Config) {
+    fn overlay(&mut self, other: Self) {
         if other.journal_root.is_some() {
             self.journal_root = other.journal_root;
         }
@@ -221,7 +221,7 @@ pub fn load() -> Result<Config> {
     let cwd = std::env::current_dir()?;
     apply_overrides(&mut config, &cwd)?;
 
-    if let Some(local_path) = find_local_config(cwd)?
+    if let Some(local_path) = find_local_config(&cwd)
         && let Some(local) = read_config_file(&local_path)?
     {
         config.overlay(local);
@@ -272,20 +272,20 @@ pub fn global_config_path() -> Option<PathBuf> {
 }
 
 /// Walk up from `start` looking for a local config file.
-pub fn find_local_config(start: PathBuf) -> Result<Option<PathBuf>> {
-    let mut current: Option<&Path> = Some(start.as_path());
+pub fn find_local_config(start: &Path) -> Option<PathBuf> {
+    let mut current = Some(start);
 
     while let Some(dir) = current {
         let candidate = dir.join(LOCAL_CONFIG_NAME);
 
         if candidate.is_file() {
-            return Ok(Some(candidate));
+            return Some(candidate);
         }
 
         current = dir.parent();
     }
 
-    Ok(None)
+    None
 }
 
 /// Read and parse a config file, returning `None` if it does not exist.

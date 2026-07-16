@@ -153,7 +153,7 @@ fn run_config(action: ConfigAction) -> Result<()> {
                 Some(path) => println!("global: {}", path.display()),
                 None => println!("global: <unavailable>"),
             }
-            match config::find_local_config(std::env::current_dir()?)? {
+            match config::find_local_config(&std::env::current_dir()?) {
                 Some(path) => println!("local:  {}", path.display()),
                 None => println!("local:  <none>"),
             }
@@ -174,9 +174,9 @@ fn run_config(action: ConfigAction) -> Result<()> {
             let config = config::load()?;
 
             let value = match key.as_str() {
-                "journal-root" => config.journal_root.clone(),
+                "journal-root" => config.journal_root,
                 "format" => Some(config.journal_format().to_string()),
-                "editor" => config.editor.clone(),
+                "editor" => config.editor,
                 "cursor-format" => Some(config.cursor_format().to_string()),
                 other => bail!("unknown config key `{other}`"),
             };
@@ -226,13 +226,14 @@ fn open_config() -> Result<()> {
         },
         // Local: reuse an existing `.selfnotes.toml` up the tree, else create
         // one in the current directory.
-        _ => match config::find_local_config(std::env::current_dir()?)? {
-            Some(path) => path,
-            None => {
+        _ => {
+            if let Some(path) = config::find_local_config(&std::env::current_dir()?) {
+                path
+            } else {
                 let path = config::save_local(&Config::default())?;
                 println!("Created {}", path.display());
                 path
-            },
+            }
         },
     };
 

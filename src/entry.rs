@@ -156,6 +156,7 @@ fn editor_command(config: &Config) -> Result<String> {
 /// With no cursor, this is just the path. With a cursor, `Config::cursor_format` is expanded (`{path}`, `{line}`,
 /// `{column}`) and split on whitespace so multi-argument forms like vim's `+{line} {path}` work while a path with
 /// spaces stays in a single argument.
+#[allow(clippy::literal_string_with_formatting_args)] // The `{path}`/`{line}`/`{column}` literals are template placeholders replaced by hand, not `format!` arguments.
 fn entry_args(config: &Config, path: &Path, cursor: Option<&Cursor>) -> Vec<String> {
     let path = path.to_string_lossy();
 

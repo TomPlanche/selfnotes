@@ -145,18 +145,17 @@ impl Renderer<'_> {
                 // Conditional block: render its body only when the key is set.
                 let key = key.trim();
 
-                match find_block_end(after_tag) {
-                    Some((body, remainder)) => {
-                        if self.ctx.is_set(key) {
-                            self.render(body);
-                        }
-                        rest = remainder;
-                    },
-                    None => {
-                        // Unbalanced open: preserve the original tag verbatim.
-                        push_tag(&mut self.output, raw);
-                        rest = after_tag;
-                    },
+                if let Some((body, remainder)) = find_block_end(after_tag) {
+                    if self.ctx.is_set(key) {
+                        self.render(body);
+                    }
+
+                    rest = remainder;
+                } else {
+                    // Unbalanced open: preserve the original tag verbatim.
+                    push_tag(&mut self.output, raw);
+
+                    rest = after_tag;
                 }
             } else if tag.starts_with('/') {
                 // Stray close tag with no matching open: leave it intact.
