@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context as _, Result};
+use anyhow::{Context as _, Result, bail};
 use chrono::Datelike;
 
 use crate::config::{self, Config, FolderConfig};
@@ -49,10 +49,13 @@ pub fn create_folder_entry(
     name: &str,
     fields: Vec<(String, String)>,
 ) -> Result<Entry> {
-    let root = config.resolved_journal_root()?;
-    let sub = folder.path.as_deref().unwrap_or(&folder.name);
-    let dir = root.join(sub);
+    // Re-validate at the sink so the invariant holds for every caller. `main` runs these same checks earlier to fail
+    // before prompting the user; both are cheap and idempotent.
+    validate_entry_name(name)?;
+
+    let dir = folder_dir(config, folder)?;
     let file_name = format!("{}.{}", name, config.folder_format(folder));
+    // With `dir` inside the root and `name` a single plain component, this stays under the root.
     let path = dir.join(file_name);
 
     let ctx = Context::now().with_name(name).with_fields(folder.name.as_str(), fields);
@@ -60,6 +63,76 @@ pub fn create_folder_entry(
     let default = "# {{name}}\n\n_Created {{datetime}}_\n\n";
 
     write_entry(&path, template, default, &ctx)
+}
+
+/// Resolve the directory a folder's entries live in: `<root>/<folder.path-or-name>`.
+///
+/// Errors if the directory escapes the journal root, so callers can validate before prompting the user for anything.
+pub fn folder_dir(config: &Config, folder: &FolderConfig) -> Result<PathBuf> {
+    let root = config.resolved_journal_root()?;
+    let sub = folder.path.as_deref().unwrap_or(&folder.name);
+    let dir = root.join(sub);
+
+    ensure_within_root(&root, &dir)?;
+
+    Ok(dir)
+}
+
+/// Reject entry names that are not a single, plain filename.
+///
+/// The name is joined onto the journal root to form the entry path, so it must not contain a path separator (`/` or
+/// `\`), be `.`/`..`, or be absolute. Without this, `selfnotes new ticket ../../secret` would write outside the journal
+/// root.
+pub fn validate_entry_name(name: &str) -> Result<()> {
+    use std::path::Component;
+
+    // `Path::components` treats `\` as a separator only on Windows, so reject it explicitly for cross-platform safety.
+    if name.contains('/') || name.contains('\\') {
+        bail!("invalid entry name `{name}`: must not contain a path separator");
+    }
+
+    let mut components = Path::new(name).components();
+
+    match (components.next(), components.next()) {
+        (Some(Component::Normal(_)), None) => Ok(()),
+        _ => bail!("invalid entry name `{name}`: must not be empty, `.`, `..`, or an absolute path"),
+    }
+}
+
+/// Ensure `path` stays within `root` after lexically resolving any `.`/`..` components.
+///
+/// This is lexical (no filesystem access), so it works before the entry file or its directories exist and guards
+/// against a `folder.path` config value that walks out of the journal root.
+fn ensure_within_root(root: &Path, path: &Path) -> Result<()> {
+    let normalized = lexical_normalize(path);
+
+    anyhow::ensure!(
+        normalized.starts_with(lexical_normalize(root)),
+        "resolved entry path {} escapes the journal root {}",
+        normalized.display(),
+        root.display(),
+    );
+
+    Ok(())
+}
+
+/// Lexically resolve `.` and `..` components without touching the filesystem.
+fn lexical_normalize(path: &Path) -> PathBuf {
+    use std::path::Component;
+
+    let mut out = PathBuf::new();
+
+    for component in path.components() {
+        match component {
+            Component::ParentDir => {
+                out.pop();
+            },
+            Component::CurDir => {},
+            other => out.push(other.as_os_str()),
+        }
+    }
+
+    out
 }
 
 /// Write an entry file if it does not already exist.
@@ -177,5 +250,51 @@ fn entry_args(config: &Config, path: &Path, cursor: Option<&Cursor>) -> Vec<Stri
                 .collect()
         },
         None => vec![path.into_owned()],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn accepts_plain_entry_names() {
+        for name in ["ticket", "my-note", "2026-07-16", "note.with.dots"] {
+            assert!(validate_entry_name(name).is_ok(), "expected `{name}` to be accepted");
+        }
+    }
+
+    #[test]
+    fn rejects_traversal_and_separators() {
+        for name in [
+            "",
+            ".",
+            "..",
+            "../secret",
+            "../../secret",
+            "a/b",
+            "/etc/passwd",
+            "a\\b",
+            "..\\secret",
+        ] {
+            assert!(validate_entry_name(name).is_err(), "expected `{name}` to be rejected");
+        }
+    }
+
+    #[test]
+    fn within_root_accepts_contained_paths() {
+        let root = Path::new("/home/u/notes");
+
+        assert!(ensure_within_root(root, Path::new("/home/u/notes/tickets/foo.md")).is_ok());
+        // A `..` that stays under the root is fine.
+        assert!(ensure_within_root(root, Path::new("/home/u/notes/tickets/../ideas/foo.md")).is_ok());
+    }
+
+    #[test]
+    fn within_root_rejects_escaping_paths() {
+        let root = Path::new("/home/u/notes");
+
+        assert!(ensure_within_root(root, Path::new("/home/u/notes/../../secret.md")).is_err());
+        assert!(ensure_within_root(root, Path::new("/etc/passwd")).is_err());
     }
 }

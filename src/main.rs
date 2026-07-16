@@ -42,6 +42,10 @@ fn main() -> Result<()> {
                 None => select_folder(&config)?,
             };
 
+            // Validate the target directory (which does not depend on the entry name) before prompting, so a
+            // misconfigured folder fails immediately instead of after the user fills everything in.
+            entry::folder_dir(&config, &folder_config)?;
+
             let name = match name {
                 Some(name) => name,
                 None => prompt_name()?,
@@ -51,6 +55,8 @@ fn main() -> Result<()> {
             if name.is_empty() {
                 bail!("entry name cannot be empty");
             }
+            // Reject a traversal-laden name before prompting for the folder's fields.
+            entry::validate_entry_name(name)?;
 
             let fields = prompt_fields(&folder_config)?;
 
