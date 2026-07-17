@@ -40,6 +40,12 @@ selfnotes new ticket          # skip the folder picker, prompt for a name
 selfnotes new ticket login-bug   # pass both directly
 selfnotes new ticket login-bug --no-open
 
+selfnotes list                # list recent entries, newest first
+selfnotes recent              # alias for `list`
+selfnotes list -n 20          # show up to 20 entries
+selfnotes list --folder journal   # only the built-in journal
+selfnotes list --folder ticket    # only the `ticket` folder
+
 selfnotes config path         # show config locations and effective values
 selfnotes config validate     # check the effective config for problems
 selfnotes config get journal-root
@@ -58,6 +64,18 @@ zed <journal-root> <journal-root>/2026/07/13.md
 The editor comes from the `editor` config key, falling back to `$EDITOR`. Pass `--no-open` to skip this. Since the entry is written before the editor is launched, a missing or failing editor is reported as a warning and does not fail the command.
 
 Creating an entry never overwrites an existing file: if the target already exists, it is left untouched (and reopened).
+
+## Listing entries
+
+`selfnotes list` (aliased as `selfnotes recent`) scans the journal and every custom folder and prints the entries most recently modified, newest first, so you can find a note without opening the editor. Each line is the modification time, the source (`journal` or a folder name), and the entry path relative to the journal root:
+
+```
+2026-07-17 09:00  journal  2026/07/17.md
+2026-07-10 09:00  ticket   tickets/login-bug.md
+2026-07-01 09:00  idea     idea/dark-mode.md
+```
+
+Pass `-n`/`--limit` to change how many entries are shown (default 10). Pass `--folder <name>` to restrict the listing to a single source: a custom folder's name, or the reserved value `journal` for the built-in journal. Dotfiles are skipped, and a missing folder directory simply contributes nothing.
 
 ## Configuration
 

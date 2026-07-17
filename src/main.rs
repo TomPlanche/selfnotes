@@ -4,11 +4,13 @@
 mod cli;
 mod config;
 mod entry;
+mod list;
 mod template;
 
 use std::path::Path;
 
 use anyhow::{Context as _, Result, bail};
+use chrono::{DateTime, Local};
 use clap::Parser;
 use dialoguer::theme::ColorfulTheme;
 use dialoguer::{Input, Select};
@@ -66,7 +68,37 @@ fn main() -> Result<()> {
             report(&entry);
             maybe_open(&config, &entry, no_open);
         },
+        Command::List { limit, folder } => {
+            let config = config::load()?;
+            let listings = list::recent(&config, folder.as_deref(), limit)?;
+
+            print_listings(&config, &listings)?;
+        },
         Command::Config { action } => run_config(action)?,
+    }
+
+    Ok(())
+}
+
+/// Print recent entries as `<modified>  <source>  <relative-path>`, newest first.
+///
+/// Paths are shown relative to the journal root so the list stays compact; the source column is padded so the paths
+/// line up.
+fn print_listings(config: &Config, listings: &[list::Listing]) -> Result<()> {
+    if listings.is_empty() {
+        println!("No entries found.");
+
+        return Ok(());
+    }
+
+    let root = config.resolved_journal_root()?;
+    let width = listings.iter().map(|listing| listing.source.len()).max().unwrap_or(0);
+
+    for listing in listings {
+        let when = DateTime::<Local>::from(listing.modified).format("%Y-%m-%d %H:%M");
+        let shown = listing.path.strip_prefix(&root).unwrap_or(&listing.path).display();
+
+        println!("{when}  {:<width$}  {shown}", listing.source);
     }
 
     Ok(())

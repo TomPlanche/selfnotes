@@ -35,6 +35,16 @@ pub enum Command {
         #[arg(long)]
         no_open: bool,
     },
+    /// List recent entries across the journal and custom folders (newest first).
+    #[command(visible_alias = "recent")]
+    List {
+        /// Maximum number of entries to show.
+        #[arg(short = 'n', long, default_value_t = 10)]
+        limit: usize,
+        /// Restrict to a single source: a custom folder's name, or `journal` for the built-in journal.
+        #[arg(long)]
+        folder: Option<String>,
+    },
     /// Inspect or change configuration.
     Config {
         #[command(subcommand)]
