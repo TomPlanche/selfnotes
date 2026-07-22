@@ -1,9 +1,10 @@
 //! Enumerating note files and extracting their tags and wikilinks.
 //!
 //! Notes are plain text on disk, so tags and links are text conventions embedded in each file rather than a separate
-//! database: `#tag` hashtags in the body, an optional `+++`-delimited TOML frontmatter carrying `tags = [...]`, and
-//! `[[note-name]]` wikilinks between notes. This module walks the same journal and custom-folder locations that listing
-//! does, then parses those conventions so the `tags`, `links`, and `open` commands (and `list --tag`) can query them.
+//! database: `#tag` hashtags in the body, an optional `+++`-delimited TOML frontmatter carrying `tags = [...]` (plus a
+//! human `title` and `aliases` a note can be addressed by), and `[[note-name]]` wikilinks between notes. This module
+//! walks the same journal and custom-folder locations that listing does, then parses those conventions so the `tags`,
+//! `links`, and `open` commands (and `list --tag`) can query them.
 
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -46,6 +47,10 @@ pub struct IndexedNote {
     pub tags: Vec<String>,
     /// Outbound wikilinks, de-duplicated in first-seen order.
     pub links: Vec<Link>,
+    /// Human-readable title from the frontmatter `title`, if any. A note can be linked to (and opened) by this.
+    pub title: Option<String>,
+    /// Alternative names from the frontmatter `aliases`, each also usable to link to (and open) the note.
+    pub aliases: Vec<String>,
 }
 
 /// An in-memory view of every scanned note, backing the tag, link, and open queries.
@@ -95,8 +100,14 @@ pub fn build_index(config: &Config, folder: Option<&str>) -> Result<Index> {
             continue;
         };
 
-        let (tags, links) = parse(&content, hash_min_len);
-        notes.push(IndexedNote { file, tags, links });
+        let parsed = parse(&content, hash_min_len);
+        notes.push(IndexedNote {
+            file,
+            tags: parsed.tags,
+            links: parsed.links,
+            title: parsed.title,
+            aliases: parsed.aliases,
+        });
     }
 
     Ok(Index { notes })
@@ -116,14 +127,14 @@ impl Index {
         counts.into_iter().collect()
     }
 
-    /// Every note a `[[target]]` could refer to, matched by filename stem (case-insensitively) and, when the target is
-    /// `folder/name`, by source too.
+    /// Every note a `[[target]]` could refer to. A note matches (case-insensitively) on its filename stem, its
+    /// frontmatter `title`, or any of its `aliases`; when the target is `folder/name`, the source must match too.
     pub fn resolve(&self, target: &str) -> Vec<&IndexedNote> {
-        let (folder, stem) = split_target(target);
+        let (folder, name) = split_target(target);
 
         self.notes
             .iter()
-            .filter(|note| note_matches(note, folder.as_deref(), &stem))
+            .filter(|note| note_matches(note, folder.as_deref(), &name))
             .collect()
     }
 
@@ -204,32 +215,47 @@ fn is_dotfile(path: &Path) -> bool {
         .is_some_and(|name| name.starts_with('.'))
 }
 
-/// Parse a note's tags (frontmatter + body) and its wikilinks, each de-duplicated in first-seen order.
+/// Everything parsed out of a single note.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Parsed {
+    /// Tags from the frontmatter `tags` array and inline `#tag`s, de-duplicated in first-seen order.
+    pub tags: Vec<String>,
+    /// Outbound wikilinks, de-duplicated in first-seen order.
+    pub links: Vec<Link>,
+    /// Frontmatter `title`, trimmed; `None` when unset or blank.
+    pub title: Option<String>,
+    /// Frontmatter `aliases`, trimmed, with blanks dropped.
+    pub aliases: Vec<String>,
+}
+
+/// Parse a note's tags, wikilinks, and frontmatter title/aliases.
 ///
 /// `hash_min_len` is the length at or above which an all-hexadecimal inline `#token` is treated as a git hash and
 /// skipped rather than collected as a tag; `0` disables that heuristic. It never affects frontmatter tags, which are
 /// always explicit.
-pub fn parse(content: &str, hash_min_len: usize) -> (Vec<String>, Vec<Link>) {
+pub fn parse(content: &str, hash_min_len: usize) -> Parsed {
     let (frontmatter, body) = split_frontmatter(content);
+    let meta = frontmatter.map(frontmatter_meta).unwrap_or_default();
 
-    let mut tags = Vec::new();
-    if let Some(fm) = frontmatter {
-        tags.extend(frontmatter_tags(fm));
-    }
-
+    let mut tags = meta.tags;
     let mut links = Vec::new();
     scan_body(body, hash_min_len, &mut tags, &mut links);
 
     dedup(&mut tags);
     dedup(&mut links);
 
-    (tags, links)
+    Parsed {
+        tags,
+        links,
+        title: meta.title,
+        aliases: meta.aliases,
+    }
 }
 
 /// All tags from a note: the frontmatter `tags` array plus every inline `#tag`, de-duplicated. See [`parse`] for
 /// `hash_min_len`.
 pub fn extract_tags(content: &str, hash_min_len: usize) -> Vec<String> {
-    parse(content, hash_min_len).0
+    parse(content, hash_min_len).tags
 }
 
 /// Split a leading `+++`-delimited TOML frontmatter block from the body.
@@ -264,20 +290,46 @@ fn split_frontmatter(content: &str) -> (Option<&str>, &str) {
     (None, content)
 }
 
-/// Read `tags` out of a TOML frontmatter block, ignoring any other keys and tolerating a parse error (returns none).
-fn frontmatter_tags(fm: &str) -> Vec<String> {
+/// The frontmatter fields the index cares about: tags, title, and aliases.
+#[derive(Default)]
+struct FrontMatterMeta {
+    tags: Vec<String>,
+    title: Option<String>,
+    aliases: Vec<String>,
+}
+
+/// Read `tags`, `title`, and `aliases` out of a TOML frontmatter block, ignoring other keys and tolerating a parse
+/// error (returns defaults).
+fn frontmatter_meta(fm: &str) -> FrontMatterMeta {
     #[derive(Deserialize)]
     struct FrontMatter {
         #[serde(default)]
         tags: Vec<String>,
+        title: Option<String>,
+        #[serde(default)]
+        aliases: Vec<String>,
     }
 
-    toml::from_str::<FrontMatter>(fm)
-        .map(|parsed| parsed.tags)
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|tag| normalize_tag(&tag))
-        .collect()
+    let Ok(parsed) = toml::from_str::<FrontMatter>(fm) else {
+        return FrontMatterMeta::default();
+    };
+
+    FrontMatterMeta {
+        tags: parsed.tags.iter().filter_map(|tag| normalize_tag(tag)).collect(),
+        title: parsed.title.and_then(|title| normalize_name(&title)),
+        aliases: parsed
+            .aliases
+            .iter()
+            .filter_map(|alias| normalize_name(alias))
+            .collect(),
+    }
+}
+
+/// Trim a title or alias, returning `None` when nothing is left. Unlike a tag, it keeps its inner punctuation and case.
+fn normalize_name(name: &str) -> Option<String> {
+    let name = name.trim();
+
+    (!name.is_empty()).then(|| name.to_owned())
 }
 
 /// Normalize a written tag: trim it, drop a leading `#` and any trailing `/`, and discard it if nothing remains.
@@ -494,26 +546,30 @@ fn is_tag_continue(c: char) -> bool {
     c.is_alphanumeric() || matches!(c, '-' | '_' | '/')
 }
 
-/// Split a link target into an optional folder prefix and a lowercased, extension-stripped stem.
+/// Split a link target into an optional (lowercased) folder prefix and the trailing name to match on.
+///
+/// Extension stripping is deferred to [`note_matches`], since it only applies to the filename comparison, not to a
+/// `title`/`alias` (which may legitimately contain dots).
 fn split_target(target: &str) -> (Option<String>, String) {
     let target = target.trim();
 
-    let (folder, name) = match target.rsplit_once('/') {
-        Some((folder, name)) => (Some(folder.to_lowercase()), name),
-        None => (None, target),
-    };
-
-    let stem = Path::new(name)
-        .file_stem()
-        .and_then(|stem| stem.to_str())
-        .unwrap_or(name)
-        .to_lowercase();
-
-    (folder, stem)
+    match target.rsplit_once('/') {
+        Some((folder, name)) => (Some(folder.trim().to_lowercase()), name.trim().to_owned()),
+        None => (None, target.to_owned()),
+    }
 }
 
-/// Whether a note's file stem (and, when a folder is given, its source) matches a resolved target.
-fn note_matches(note: &IndexedNote, folder: Option<&str>, stem: &str) -> bool {
+/// Whether a note matches a resolved target: its filename stem, frontmatter `title`, or any alias equals `name`
+/// (case-insensitively), and, when a folder is given, its source matches too.
+fn note_matches(note: &IndexedNote, folder: Option<&str>, name: &str) -> bool {
+    if let Some(folder) = folder
+        && note.file.source.to_lowercase() != folder
+    {
+        return false;
+    }
+
+    let name = name.to_lowercase();
+
     let file_stem = note
         .file
         .path
@@ -521,12 +577,15 @@ fn note_matches(note: &IndexedNote, folder: Option<&str>, stem: &str) -> bool {
         .and_then(|stem| stem.to_str())
         .unwrap_or_default()
         .to_lowercase();
+    // Strip an extension from the target only for the filename comparison, so `[[note.md]]` still matches `note`.
+    let name_stem = Path::new(&name)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or(&name);
 
-    if file_stem != stem {
-        return false;
-    }
-
-    folder.is_none_or(|folder| note.file.source.to_lowercase() == folder)
+    file_stem == name_stem
+        || note.title.as_deref().is_some_and(|title| title.to_lowercase() == name)
+        || note.aliases.iter().any(|alias| alias.to_lowercase() == name)
 }
 
 /// Drop later duplicates, keeping the first occurrence of each value.
@@ -600,7 +659,7 @@ mod tests {
             "See [[login-bug]] and [[ticket/PROJ-1|the ticket]] plus [[login-bug]] again.\n",
             HASH_MIN,
         )
-        .1;
+        .links;
 
         assert_eq!(
             links,
@@ -622,7 +681,7 @@ mod tests {
         let content = "Real [[note-a]].\n\n```\n[[not-a-link]]\n```\n\nInline `[[skip]]` too.\n";
 
         assert_eq!(
-            parse(content, HASH_MIN).1,
+            parse(content, HASH_MIN).links,
             [Link {
                 target: "note-a".into(),
                 display: None,
@@ -632,7 +691,19 @@ mod tests {
 
     #[test]
     fn empty_link_target_is_ignored() {
-        assert!(parse("[[]] and [[  |only display]]\n", HASH_MIN).1.is_empty());
+        assert!(parse("[[]] and [[  |only display]]\n", HASH_MIN).links.is_empty());
+    }
+
+    #[test]
+    fn parses_frontmatter_title_and_aliases() {
+        let content =
+            "+++\ntitle = \"Login bug investigation\"\naliases = [\"login-bug\", \" PROJ-1 \", \"\"]\n+++\n\nbody\n";
+
+        let parsed = parse(content, HASH_MIN);
+
+        // Title is trimmed; aliases are trimmed and blanks dropped.
+        assert_eq!(parsed.title.as_deref(), Some("Login bug investigation"));
+        assert_eq!(parsed.aliases, ["login-bug", "PROJ-1"]);
     }
 
     #[test]
@@ -679,6 +750,8 @@ mod tests {
                     display: None,
                 })
                 .collect(),
+            title: None,
+            aliases: Vec::new(),
         }
     }
 
@@ -697,6 +770,26 @@ mod tests {
         let hits = index.resolve("tickets/login-bug.md");
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].file.source, "tickets");
+    }
+
+    #[test]
+    fn resolve_matches_by_title_and_alias() {
+        let mut note = indexed("/n/tickets/PROJ-1.md", "tickets", &[]);
+        note.title = Some("Login bug investigation".into());
+        note.aliases = vec!["login-bug".into()];
+        let index = Index { notes: vec![note] };
+
+        // Filename stem still resolves.
+        assert_eq!(index.resolve("proj-1").len(), 1);
+        // Title matches case-insensitively despite spaces.
+        assert_eq!(index.resolve("login bug INVESTIGATION").len(), 1);
+        // An alias matches, including with a folder qualifier.
+        assert_eq!(index.resolve("login-bug").len(), 1);
+        assert_eq!(index.resolve("tickets/login-bug").len(), 1);
+        // A different folder does not match.
+        assert!(index.resolve("ideas/login-bug").is_empty());
+        // An unrelated name matches nothing.
+        assert!(index.resolve("nope").is_empty());
     }
 
     #[test]

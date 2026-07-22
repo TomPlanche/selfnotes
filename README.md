@@ -167,6 +167,27 @@ Backlinks:
   2026/07/22.md
 ```
 
+#### Titles and aliases
+
+A note's filename is not always what you want to type. Give a note a human-readable `title` and any number of `aliases` in its frontmatter, and a `[[wikilink]]`, `selfnotes links`, or `selfnotes open` will resolve to it by any of those, not just the filename. Matching stays case-insensitive, and a `folder/name` qualifier still applies.
+
+```markdown
++++
+title = "Login bug investigation"
+aliases = ["login-bug", "PROJ-1"]
++++
+```
+
+With the above (in a file that might be named `note-42.md`), every one of these finds the note:
+
+```
+selfnotes open note-42                    # by filename
+selfnotes open PROJ-1                      # by alias
+selfnotes open "Login bug investigation"   # by title
+```
+
+And in prose, `[[login-bug]]`, `[[PROJ-1]]`, and `[[Login bug investigation]]` all link to it. When a name (filename, title, or alias) is shared by more than one note it is reported as ambiguous, and `links` / `open` list the candidates, showing each note's title where it has one, so you can qualify with `folder/name`.
+
 ## Configuration
 
 Configuration is merged from up to three layers, each overriding the previous:

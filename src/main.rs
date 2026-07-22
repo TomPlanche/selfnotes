@@ -156,7 +156,10 @@ fn print_links(config: &Config, index: &Index, name: &str) -> Result<()> {
     let root = config.resolved_journal_root()?;
     let rel = |path: &Path| path.strip_prefix(&root).unwrap_or(path).display().to_string();
 
-    println!("{}", rel(&note.file.path));
+    match &note.title {
+        Some(title) => println!("{}  ({title})", rel(&note.file.path)),
+        None => println!("{}", rel(&note.file.path)),
+    }
 
     println!();
     println!("Outbound links:");
@@ -205,7 +208,13 @@ fn resolve_one<'a>(index: &'a Index, name: &str) -> Result<&'a IndexedNote> {
         many => {
             let candidates = many
                 .iter()
-                .map(|note| format!("  {}", note.file.path.display()))
+                .map(|note| {
+                    let path = note.file.path.display();
+
+                    note.title
+                        .as_ref()
+                        .map_or_else(|| format!("  {path}"), |title| format!("  {path}  ({title})"))
+                })
                 .collect::<Vec<_>>()
                 .join("\n");
 
