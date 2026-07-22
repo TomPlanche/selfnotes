@@ -1,7 +1,7 @@
 //! Command-line interface for `selfnotes`.
 //! `selfnotes -h` for full usage information.
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 
 /// The main CLI for `selfnotes`.
 #[derive(Debug, Parser)]
@@ -44,12 +44,44 @@ pub enum Command {
         /// Restrict to a single source: a custom folder's name, or `journal` for the built-in journal.
         #[arg(long)]
         folder: Option<String>,
+        /// Only show entries carrying this tag (repeatable; every listed tag must match). Matches nested tags too, so
+        /// `--tag work` also matches `work/project`.
+        #[arg(long = "tag")]
+        tags: Vec<String>,
+    },
+    /// List every tag and how many notes use it.
+    Tags {
+        /// Restrict to a single source: a custom folder's name, or `journal` for the built-in journal.
+        #[arg(long)]
+        folder: Option<String>,
+        /// Sort order for the listing.
+        #[arg(long, value_enum, default_value_t = TagSort::Count)]
+        sort: TagSort,
+    },
+    /// Show a note's outbound `[[links]]` and the notes that link back to it.
+    Links {
+        /// Note to inspect, by name (optionally `folder/name`).
+        name: String,
+    },
+    /// Resolve a `[[note-name]]` target and open it in your editor.
+    Open {
+        /// Note to open, by name (optionally `folder/name`).
+        name: String,
     },
     /// Inspect or change configuration.
     Config {
         #[command(subcommand)]
         action: ConfigAction,
     },
+}
+
+/// Sort order for the `tags` listing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum TagSort {
+    /// Most-used tags first.
+    Count,
+    /// Alphabetical.
+    Name,
 }
 
 #[derive(Debug, Subcommand)]
@@ -62,12 +94,12 @@ pub enum ConfigAction {
     Open,
     /// Print a single configuration value.
     Get {
-        /// One of: journal-root, format, editor, cursor-format.
+        /// One of: journal-root, format, editor, cursor-format, hash-tag-min-len.
         key: String,
     },
     /// Set a value in the global configuration.
     Set {
-        /// One of: journal-root, format, editor, cursor-format.
+        /// One of: journal-root, format, editor, cursor-format, hash-tag-min-len.
         key: String,
         /// The value to store.
         value: String,

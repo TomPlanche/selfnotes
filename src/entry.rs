@@ -36,7 +36,7 @@ pub fn create_journal(config: &Config) -> Result<Entry> {
         .and_then(|journal| journal.template_file.as_deref());
     let default = "# {{date}}\n\n";
 
-    write_entry(&path, template, default, &ctx)
+    write_entry(&path, template, default, &ctx, &config.journal_default_tags())
 }
 
 /// Create an entry in a custom folder: `<root>/<folder.path>/<name>.<format>`.
@@ -62,7 +62,7 @@ pub fn create_folder_entry(
     let template = folder.template_file.as_deref();
     let default = "# {{name}}\n\n_Created {{datetime}}_\n\n";
 
-    write_entry(&path, template, default, &ctx)
+    write_entry(&path, template, default, &ctx, &config.folder_default_tags(folder))
 }
 
 /// Resolve the directory a folder's entries live in: `<root>/<folder.path-or-name>`.
@@ -145,8 +145,15 @@ fn lexical_normalize(path: &Path) -> PathBuf {
 /// Write an entry file if it does not already exist.
 ///
 /// `template_file` is an optional path to a template; when absent, `default` is rendered instead. Both go through
-/// placeholder substitution.
-fn write_entry(path: &Path, template_file: Option<&str>, default: &str, ctx: &Context) -> Result<Entry> {
+/// placeholder substitution, and any `default_tags` are seeded into the note's frontmatter before rendering (so a
+/// `{{cursor}}` position stays correct).
+fn write_entry(
+    path: &Path,
+    template_file: Option<&str>,
+    default: &str,
+    ctx: &Context,
+    default_tags: &[String],
+) -> Result<Entry> {
     if path.exists() {
         return Ok(Entry {
             path: path.to_path_buf(),
@@ -169,6 +176,7 @@ fn write_entry(path: &Path, template_file: Option<&str>, default: &str, ctx: &Co
         None => default.to_string(),
     };
 
+    let raw = crate::notes::ensure_frontmatter_tags(&raw, default_tags);
     let rendered = template::render(&raw, ctx);
 
     std::fs::write(path, &rendered.content).with_context(|| format!("writing entry {}", path.display()))?;
@@ -365,6 +373,7 @@ mod tests {
         );
     }
 
+    #[allow(clippy::literal_string_with_formatting_args)]
     #[test]
     fn entry_args_splits_multi_argument_cursor_formats() {
         // vim's `+{line} {path}` becomes two arguments after the whitespace split.

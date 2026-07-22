@@ -45,6 +45,14 @@ selfnotes recent              # alias for `list`
 selfnotes list -n 20          # show up to 20 entries
 selfnotes list --folder journal   # only the built-in journal
 selfnotes list --folder ticket    # only the `ticket` folder
+selfnotes list --tag work         # only entries tagged #work (repeatable; all must match)
+
+selfnotes tags                # list every tag with a note count, most-used first
+selfnotes tags --sort name    # alphabetical instead
+selfnotes tags --folder ticket    # only tags in the `ticket` folder
+
+selfnotes links login-bug     # show a note's [[links]] and its backlinks
+selfnotes open login-bug      # resolve a [[wikilink]] target and open it
 
 selfnotes config path         # show config locations and effective values
 selfnotes config validate     # check the effective config for problems
@@ -53,6 +61,7 @@ selfnotes config set journal-root ~/notes
 selfnotes config set format md
 selfnotes config set editor "zed"
 selfnotes config set cursor-format "{path}:{line}:{column}"
+selfnotes config set hash-tag-min-len 7   # tune the git-hash-vs-tag threshold
 ```
 
 By default, creating an entry opens it in your editor. The editor is invoked with two arguments, the journal root and the entry file, so an editor like `zed` opens the whole notes workspace and focuses the file:
@@ -77,6 +86,87 @@ Creating an entry never overwrites an existing file: if the target already exist
 
 Pass `-n`/`--limit` to change how many entries are shown (default 10). Pass `--folder <name>` to restrict the listing to a single source: a custom folder's name, or the reserved value `journal` for the built-in journal. Dotfiles are skipped, and a missing folder directory simply contributes nothing.
 
+## Tags and links
+
+Notes stay plain text, so tags and links are conventions written inside a note rather than a separate database. `selfnotes` reads them back out on demand, which means your notes remain portable and every change is a plain diff in `git`.
+
+### Tags
+
+A note can be tagged two ways, and both are merged:
+
+- Inline `#tag` anywhere in the body. The `#` must sit at the start of a line or after whitespace, so a markdown heading (`# Title`) or a URL fragment (`page#anchor`) is never mistaken for a tag. Tags may nest with `/`, e.g. `#work/project`.
+- A `+++`-delimited TOML frontmatter block at the very top of the file with a `tags` array. Any other frontmatter keys are ignored.
+
+```markdown
++++
+tags = ["work", "bug/auth"]
++++
+
+# 2026-07-22
+
+Fixed the login bug today. #work #sprint-42
+```
+
+Tags inside fenced code blocks (```` ``` ````) or inline code spans (`` `#notatag` ``) are ignored, so code samples do not pollute your tags.
+
+`selfnotes tags` lists every tag with the number of notes using it, most-used first (`--sort name` for alphabetical). `selfnotes list --tag <tag>` filters the recent listing to notes carrying that tag; pass `--tag` more than once to require all of them. Matching is case-insensitive, and a tag also matches its nested children, so `--tag work` matches both `#work` and `#work/project`. Both commands accept `--folder` to scope to a single source.
+
+```
+$ selfnotes tags
+2  #work
+1  #bug/auth
+1  #sprint-42
+```
+
+#### Default tags
+
+A config layer can seed tags onto every new note it creates. Set `default_tags` at the top level to tag everything, `[journal]`'s `default_tags` for journal entries, and a folder's `default_tags` for that folder; the effective set for a note is the global list plus the relevant per-source list. The tags are written into the note's `+++` frontmatter at creation (merged into any frontmatter a template already provides), so they are real, portable tags, not an invisible overlay, and only new notes are affected.
+
+```toml
+default_tags = ["me"]          # on every new note
+
+[journal]
+default_tags = ["daily"]       # journal entries also get #daily (e.g. a daily scrum)
+
+[[custom_folders]]
+name = "ticket"
+default_tags = ["work"]        # tickets also get #work
+```
+
+With the above, `selfnotes` (a journal entry) starts with `tags = ["me", "daily"]` in its frontmatter.
+
+#### Git hashes are not tags
+
+A purely numeric `#123` is never a tag (a tag must start with a letter or underscore), so issue references are already safe. To keep commit hashes such as `#deadbeef` or `#a1b2c3d` from being read as tags too, an inline `#token` that is entirely hexadecimal and at least `hash_tag_min_len` characters long is treated as a git hash and skipped. The default is 6, covering abbreviated (6/7/8-character) and full 40-character hashes. This only applies to inline `#` tags, never to frontmatter tags, which are always explicit.
+
+```toml
+# Raise it if you keep short all-hex tags, or set 0 to turn the heuristic off entirely.
+hash_tag_min_len = 7
+```
+
+The trade-off of a low threshold is that an all-hex word used as a tag (e.g. `#facade`, `#decade`) is also skipped; raise the value or disable it with `0` if that bites. It can also be read or set from the CLI: `selfnotes config get hash-tag-min-len` / `selfnotes config set hash-tag-min-len 7`.
+
+### Links
+
+Link one note to another with a `[[wikilink]]`, optionally with display text as `[[target|shown text]]`. The target is a note's name (its filename without the extension); prefix it with a folder to disambiguate when the same name exists in more than one place, e.g. `[[tickets/login-bug]]`. Matching is case-insensitive, and links inside code are ignored just like tags.
+
+```markdown
+Related: [[login-bug]] and [[tickets/PROJ-1|the ticket]].
+```
+
+`selfnotes links <name>` resolves a note by name and shows its outbound links (with where each one resolves, or `unresolved` / `ambiguous`) together with its backlinks, the notes that link to it. `selfnotes open <name>` resolves the same way and opens the note in your editor. When a bare name is ambiguous across folders, both commands list the candidates so you can qualify it with a `folder/name`.
+
+```
+$ selfnotes links roadmap
+ideas/roadmap.md
+
+Outbound links:
+  [[login-bug]] -> ideas/login-bug.md
+
+Backlinks:
+  2026/07/22.md
+```
+
 ## Configuration
 
 Configuration is merged from up to three layers, each overriding the previous:
@@ -85,7 +175,7 @@ Configuration is merged from up to three layers, each overriding the previous:
 - Overrides: path-scoped config files declared in the global config (see below).
 - Local: the nearest `.selfnotes.toml` found by walking up from the current directory.
 
-Scalar keys (`journal_root`, `format`, `editor`, `cursor_format`) and the `[journal]` section are merged field by field. Each `[[custom_folders]]` entry is matched by `name`: a later entry with the same name replaces the earlier one, and any new names are appended.
+Scalar keys (`journal_root`, `format`, `editor`, `cursor_format`, `hash_tag_min_len`) and the `[journal]` section are merged field by field. `default_tags` (top level and per source) is replaced by a later layer that sets a non-empty list. Each `[[custom_folders]]` entry is matched by `name`: a later entry with the same name replaces the earlier one, and any new names are appended.
 
 ### Path-scoped overrides
 
@@ -109,10 +199,16 @@ journal_root = "~/notes"
 format = "md"
 # Optional editor for `--open` (falls back to $EDITOR).
 editor = "nvim"
+# Tags seeded into every new note's frontmatter.
+default_tags = ["me"]
+# All-hex inline #tokens this long or longer are treated as git hashes, not tags (default 6; 0 disables).
+hash_tag_min_len = 6
 
 [journal]
 # Optional template rendered into new journal entries.
 template_file = "~/.config/selfnotes/templates/journal.md"
+# Journal entries are also tagged #daily.
+default_tags = ["daily"]
 
 [[custom_folders]]
 name = "ticket"
@@ -121,6 +217,8 @@ path = "tickets"
 template_file = "~/.config/selfnotes/templates/ticket.md"
 # Optional per-folder extension override.
 format = "md"
+# Tickets are also tagged #work.
+default_tags = ["work"]
 
 [[custom_folders]]
 name = "idea"

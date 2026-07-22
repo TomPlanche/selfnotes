@@ -20,6 +20,12 @@ pub const DEFAULT_FORMAT: &str = "md";
 /// Default cursor-position format, matching zed / VS Code (`-g`) syntax.
 pub const DEFAULT_CURSOR_FORMAT: &str = "{path}:{line}:{column}";
 
+/// Default minimum length of an all-hexadecimal inline `#token` treated as a git hash rather than a tag.
+///
+/// Set to 6 so abbreviated commit hashes (git's `--short` is commonly 7, sometimes 6) and full 40-character SHA-1
+/// hashes are never mistaken for tags. See [`Config::hash_tag_min_len`].
+pub const DEFAULT_HASH_TAG_MIN_LEN: usize = 6;
+
 /// Top-level configuration, deserialized from TOML.
 #[derive(Debug, Default, Clone, Deserialize, Serialize)]
 pub struct Config {
@@ -33,6 +39,12 @@ pub struct Config {
     /// whitespace into arguments.
     /// Defaults to `{path}:{line}:{column}` (zed / VS Code style).
     pub cursor_format: Option<String>,
+    /// Tags seeded into the frontmatter of every new note, on top of any per-source defaults.
+    #[serde(default)]
+    pub default_tags: Vec<String>,
+    /// Minimum length of an all-hexadecimal inline `#token` treated as a git hash rather than a tag. `Some(0)`
+    /// disables the heuristic; unset uses [`DEFAULT_HASH_TAG_MIN_LEN`].
+    pub hash_tag_min_len: Option<usize>,
     /// Journal-specific settings.
     pub journal: Option<JournalConfig>,
     /// User-defined folders, selected by name from the command line.
@@ -63,6 +75,9 @@ pub struct JournalConfig {
     pub template_file: Option<String>,
     /// Extension override for journal entries.
     pub format: Option<String>,
+    /// Tags seeded into the frontmatter of new journal entries, in addition to the global `default_tags`.
+    #[serde(default)]
+    pub default_tags: Vec<String>,
 }
 
 /// Settings for a user-defined folder such as `ticket`.
@@ -77,6 +92,9 @@ pub struct FolderConfig {
     pub template_file: Option<String>,
     /// Extension override for this folder's entries.
     pub format: Option<String>,
+    /// Tags seeded into the frontmatter of new entries in this folder, in addition to the global `default_tags`.
+    #[serde(default)]
+    pub default_tags: Vec<String>,
     /// Custom fields prompted for when creating an entry and exposed to the template as `{{<folder-name>.<field>}}`.
     #[serde(default)]
     pub fields: Vec<TemplateField>,
@@ -142,6 +160,14 @@ impl Config {
             self.cursor_format = other.cursor_format;
         }
 
+        if !other.default_tags.is_empty() {
+            self.default_tags = other.default_tags;
+        }
+
+        if other.hash_tag_min_len.is_some() {
+            self.hash_tag_min_len = other.hash_tag_min_len;
+        }
+
         if let Some(other_journal) = other.journal {
             let journal = self.journal.get_or_insert_with(JournalConfig::default);
 
@@ -151,6 +177,10 @@ impl Config {
 
             if other_journal.format.is_some() {
                 journal.format = other_journal.format;
+            }
+
+            if !other_journal.default_tags.is_empty() {
+                journal.default_tags = other_journal.default_tags;
             }
         }
         // A local folder replaces the global one of the same name;
@@ -209,6 +239,40 @@ impl Config {
     /// Effective editor cursor-position format.
     pub fn cursor_format(&self) -> &str {
         self.cursor_format.as_deref().unwrap_or(DEFAULT_CURSOR_FORMAT)
+    }
+
+    /// Effective minimum length for treating an all-hex inline `#token` as a git hash rather than a tag.
+    pub fn hash_tag_min_len(&self) -> usize {
+        self.hash_tag_min_len.unwrap_or(DEFAULT_HASH_TAG_MIN_LEN)
+    }
+
+    /// Tags seeded into a new journal entry: the global `default_tags` plus the journal's own, de-duplicated.
+    pub fn journal_default_tags(&self) -> Vec<String> {
+        let mut tags = self.default_tags.clone();
+
+        if let Some(journal) = &self.journal {
+            extend_unique(&mut tags, &journal.default_tags);
+        }
+
+        tags
+    }
+
+    /// Tags seeded into a new entry in `folder`: the global `default_tags` plus the folder's own, de-duplicated.
+    pub fn folder_default_tags(&self, folder: &FolderConfig) -> Vec<String> {
+        let mut tags = self.default_tags.clone();
+
+        extend_unique(&mut tags, &folder.default_tags);
+
+        tags
+    }
+}
+
+/// Append each tag from `extra` that is not already in `base`, preserving order.
+fn extend_unique(base: &mut Vec<String>, extra: &[String]) {
+    for tag in extra {
+        if !base.contains(tag) {
+            base.push(tag.clone());
+        }
     }
 }
 

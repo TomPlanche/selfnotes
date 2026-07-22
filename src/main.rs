@@ -5,6 +5,7 @@ mod cli;
 mod config;
 mod entry;
 mod list;
+mod notes;
 mod template;
 
 use std::path::Path;
@@ -15,9 +16,10 @@ use clap::Parser;
 use dialoguer::theme::ColorfulTheme;
 use dialoguer::{Input, Select};
 
-use cli::{Cli, Command, ConfigAction};
+use cli::{Cli, Command, ConfigAction, TagSort};
 use config::{Config, FolderConfig};
 use entry::Entry;
+use notes::{Index, IndexedNote};
 
 fn main() -> Result<()> {
     let args = Cli::parse();
@@ -68,11 +70,29 @@ fn main() -> Result<()> {
             report(&entry);
             maybe_open(&config, &entry, no_open);
         },
-        Command::List { limit, folder } => {
+        Command::List { limit, folder, tags } => {
             let config = config::load()?;
-            let listings = list::recent(&config, folder.as_deref(), limit)?;
+            let listings = list::recent(&config, folder.as_deref(), limit, &tags)?;
 
             print_listings(&config, &listings)?;
+        },
+        Command::Tags { folder, sort } => {
+            let config = config::load()?;
+            let index = notes::build_index(&config, folder.as_deref())?;
+
+            print_tags(&index, sort);
+        },
+        Command::Links { name } => {
+            let config = config::load()?;
+            let index = notes::build_index(&config, None)?;
+
+            print_links(&config, &index, &name)?;
+        },
+        Command::Open { name } => {
+            let config = config::load()?;
+            let index = notes::build_index(&config, None)?;
+
+            open_note(&config, &index, &name)?;
         },
         Command::Config { action } => run_config(action)?,
     }
@@ -84,7 +104,7 @@ fn main() -> Result<()> {
 ///
 /// Paths are shown relative to the journal root so the list stays compact; the source column is padded so the paths
 /// line up.
-fn print_listings(config: &Config, listings: &[list::Listing]) -> Result<()> {
+fn print_listings(config: &Config, listings: &[notes::NoteFile]) -> Result<()> {
     if listings.is_empty() {
         println!("No entries found.");
 
@@ -102,6 +122,96 @@ fn print_listings(config: &Config, listings: &[list::Listing]) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Print every tag with the number of notes using it, ordered per `sort`.
+fn print_tags(index: &Index, sort: TagSort) {
+    let mut counts = index.tag_counts();
+
+    if counts.is_empty() {
+        println!("No tags found.");
+
+        return;
+    }
+
+    // `tag_counts` is already alphabetical; only the count ordering needs a re-sort (ties fall back to the name).
+    if matches!(sort, TagSort::Count) {
+        counts.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    }
+
+    let width = counts
+        .iter()
+        .map(|(_, count)| count.to_string().len())
+        .max()
+        .unwrap_or(0);
+
+    for (tag, count) in counts {
+        println!("{count:>width$}  #{tag}");
+    }
+}
+
+/// Print a note's outbound links (with where each resolves) and its backlinks, paths shown relative to the root.
+fn print_links(config: &Config, index: &Index, name: &str) -> Result<()> {
+    let note = resolve_one(index, name)?;
+    let root = config.resolved_journal_root()?;
+    let rel = |path: &Path| path.strip_prefix(&root).unwrap_or(path).display().to_string();
+
+    println!("{}", rel(&note.file.path));
+
+    println!();
+    println!("Outbound links:");
+    if note.links.is_empty() {
+        println!("  (none)");
+    } else {
+        for link in &note.links {
+            let status = match index.resolve(&link.target).as_slice() {
+                [] => "unresolved".to_string(),
+                [one] => rel(&one.file.path),
+                many => format!("ambiguous ({} matches)", many.len()),
+            };
+
+            println!("  [[{}]] -> {status}", link.target);
+        }
+    }
+
+    println!();
+    println!("Backlinks:");
+    let backlinks = index.backlinks(&note.file.path);
+    if backlinks.is_empty() {
+        println!("  (none)");
+    } else {
+        for backlink in backlinks {
+            println!("  {}", rel(&backlink.file.path));
+        }
+    }
+
+    Ok(())
+}
+
+/// Resolve `name` to a single note and open it in the editor.
+fn open_note(config: &Config, index: &Index, name: &str) -> Result<()> {
+    let note = resolve_one(index, name)?;
+    let root = config.resolved_journal_root()?;
+
+    println!("Opening {}", note.file.path.display());
+    entry::open_in_editor(config, &root, &note.file.path, None)
+}
+
+/// Resolve a note name to exactly one note, erroring (and listing candidates) when it is missing or ambiguous.
+fn resolve_one<'a>(index: &'a Index, name: &str) -> Result<&'a IndexedNote> {
+    match index.resolve(name).as_slice() {
+        [] => bail!("no note matches `{name}`"),
+        [one] => Ok(one),
+        many => {
+            let candidates = many
+                .iter()
+                .map(|note| format!("  {}", note.file.path.display()))
+                .collect::<Vec<_>>()
+                .join("\n");
+
+            bail!("`{name}` is ambiguous ({} matches):\n{candidates}", many.len())
+        },
+    }
 }
 
 /// Print a message describing what happened to an entry.
@@ -219,6 +329,7 @@ fn run_config(action: ConfigAction) -> Result<()> {
                 "format" => Some(config.journal_format().to_string()),
                 "editor" => config.editor,
                 "cursor-format" => Some(config.cursor_format().to_string()),
+                "hash-tag-min-len" => Some(config.hash_tag_min_len().to_string()),
                 other => bail!("unknown config key `{other}`"),
             };
 
@@ -235,6 +346,13 @@ fn run_config(action: ConfigAction) -> Result<()> {
                 "format" => config.format = Some(value),
                 "editor" => config.editor = Some(value),
                 "cursor-format" => config.cursor_format = Some(value),
+                "hash-tag-min-len" => {
+                    config.hash_tag_min_len = Some(
+                        value
+                            .parse()
+                            .context("hash-tag-min-len must be a non-negative integer")?,
+                    );
+                },
                 other => bail!("unknown config key `{other}`"),
             }
 
