@@ -32,30 +32,32 @@ The file extension (`md` by default) is configurable globally, per journal, and 
 ## Usage
 
 ```
-selfnotes                     # create today's journal entry and open it
-selfnotes journal             # same as above
-selfnotes journal --no-open   # create it without launching the editor
-selfnotes new                 # pick a folder, then enter a name (interactive)
-selfnotes new ticket          # skip the folder picker, prompt for a name
+selfnotes                        # create today's journal entry and open it
+selfnotes journal                # same as above
+selfnotes journal --no-open      # create it without launching the editor
+selfnotes new                    # pick a folder, then enter a name (interactive)
+selfnotes new ticket             # skip the folder picker, prompt for a name
 selfnotes new ticket login-bug   # pass both directly
 selfnotes new ticket login-bug --no-open
 
-selfnotes list                # list recent entries, newest first
-selfnotes recent              # alias for `list`
-selfnotes list -n 20          # show up to 20 entries
-selfnotes list --folder journal   # only the built-in journal
-selfnotes list --folder ticket    # only the `ticket` folder
-selfnotes list --tag work         # only entries tagged #work (repeatable; all must match)
+selfnotes list                  # list recent entries, newest first
+selfnotes recent                # alias for `list`
+selfnotes list -n 20            # show up to 20 entries
+selfnotes list --folder journal # only the built-in journal
+selfnotes list --folder ticket  # only the `ticket` folder
+selfnotes list --tag work       # only entries tagged #work (repeatable; all must match)
 
-selfnotes tags                # list every tag with a note count, most-used first
-selfnotes tags --sort name    # alphabetical instead
-selfnotes tags --folder ticket    # only tags in the `ticket` folder
+selfnotes tags                 # list every tag with a note count, most-used first
+selfnotes tags --sort name     # alphabetical instead
+selfnotes tags --folder ticket # only tags in the `ticket` folder
 
-selfnotes links login-bug     # show a note's [[links]] and its backlinks
-selfnotes open login-bug      # resolve a [[wikilink]] target and open it
+selfnotes links login-bug # show a note's [[links]] and its backlinks
+selfnotes open login-bug  # resolve a [[wikilink]] target and open it
 
-selfnotes config path         # show config locations and effective values
-selfnotes config validate     # check the effective config for problems
+selfnotes config path                # show config locations and effective values
+selfnotes config validate            # check the effective config for problems
+selfnotes config open                # pick global or local interactively, then open it
+selfnotes config open <local|global> # open the local config directly (or `global`)
 selfnotes config get journal-root
 selfnotes config set journal-root ~/notes
 selfnotes config set format md

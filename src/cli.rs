@@ -84,6 +84,15 @@ pub enum TagSort {
     Name,
 }
 
+/// Which configuration file a `config` action targets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum ConfigScope {
+    /// The global config at `~/.config/selfnotes/config.toml`.
+    Global,
+    /// The nearest local `.selfnotes.toml`.
+    Local,
+}
+
 #[derive(Debug, Subcommand)]
 pub enum ConfigAction {
     /// Show resolved config file locations and effective values.
@@ -91,7 +100,10 @@ pub enum ConfigAction {
     /// Check the effective configuration for problems (bad paths, missing templates, ...).
     Validate,
     /// Open a config file in your editor, creating it if needed.
-    Open,
+    Open {
+        /// Which config to open: `global` or `local`. Prompted for if omitted.
+        scope: Option<ConfigScope>,
+    },
     /// Print a single configuration value.
     Get {
         /// One of: journal-root, format, editor, cursor-format, hash-tag-min-len.

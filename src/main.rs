@@ -16,7 +16,7 @@ use clap::Parser;
 use dialoguer::theme::ColorfulTheme;
 use dialoguer::{Input, Select};
 
-use cli::{Cli, Command, ConfigAction, TagSort};
+use cli::{Cli, Command, ConfigAction, ConfigScope, TagSort};
 use config::{Config, FolderConfig};
 use entry::Entry;
 use notes::{Index, IndexedNote};
@@ -306,7 +306,7 @@ fn prompt_fields(folder: &FolderConfig) -> Result<Vec<(String, String)>> {
 /// Handle the `config` subcommand.
 fn run_config(action: ConfigAction) -> Result<()> {
     match action {
-        ConfigAction::Open => return open_config(),
+        ConfigAction::Open { scope } => return open_config(scope),
         ConfigAction::Validate => return validate_config(),
         ConfigAction::Path => {
             match config::global_config_path() {
@@ -711,19 +711,18 @@ fn check_override(over: &config::Override, is_local: bool, source: &str, cwd: &P
     }
 }
 
-/// Prompt for the global or local config file, then open it in the editor,
-/// creating it if it does not exist.
-fn open_config() -> Result<()> {
-    let choice = Select::with_theme(&ColorfulTheme::default())
-        .with_prompt("Which config?")
-        .items(["global", "local"])
-        .default(0)
-        .interact()
-        .context("selecting a config scope")?;
+/// Open the global or local config file in the editor, creating it if it does not exist.
+///
+/// `scope` selects which file; when omitted, the user is prompted to pick one.
+fn open_config(scope: Option<ConfigScope>) -> Result<()> {
+    let scope = match scope {
+        Some(scope) => scope,
+        None => prompt_config_scope()?,
+    };
 
-    let path = match choice {
+    let path = match scope {
         // Global: fixed path; create with current global values if missing.
-        0 => {
+        ConfigScope::Global => {
             let path = config::global_config_path().context("could not determine a config directory")?;
             if !path.exists() {
                 config::save_global(&config::load_global()?)?;
@@ -731,9 +730,8 @@ fn open_config() -> Result<()> {
             }
             path
         },
-        // Local: reuse an existing `.selfnotes.toml` up the tree, else create
-        // one in the current directory.
-        _ => {
+        // Local: reuse an existing `.selfnotes.toml` up the tree, else create one in the current directory.
+        ConfigScope::Local => {
             if let Some(path) = config::find_local_config(&std::env::current_dir()?) {
                 path
             } else {
@@ -746,4 +744,20 @@ fn open_config() -> Result<()> {
 
     let config = config::load()?;
     entry::open_paths_in_editor(&config, &[&path])
+}
+
+/// Interactively pick the global or local config scope.
+fn prompt_config_scope() -> Result<ConfigScope> {
+    let choice = Select::with_theme(&ColorfulTheme::default())
+        .with_prompt("Which config?")
+        .items(["global", "local"])
+        .default(0)
+        .interact()
+        .context("selecting a config scope")?;
+
+    Ok(if choice == 0 {
+        ConfigScope::Global
+    } else {
+        ConfigScope::Local
+    })
 }
