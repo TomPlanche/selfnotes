@@ -31,22 +31,9 @@ fn filter_by_tags(files: Vec<NoteFile>, wanted: &[String], hash_min_len: usize) 
         .into_iter()
         .filter(|file| {
             std::fs::read_to_string(&file.path)
-                .is_ok_and(|content| matches_tags(&notes::extract_tags(&content, hash_min_len), wanted))
+                .is_ok_and(|content| notes::matches_tags(&notes::extract_tags(&content, hash_min_len), wanted))
         })
         .collect()
-}
-
-/// Whether `note_tags` satisfies every tag in `wanted` (case-insensitive, with nested-tag matching).
-fn matches_tags(note_tags: &[String], wanted: &[String]) -> bool {
-    wanted.iter().all(|want| {
-        let want = want.trim_start_matches('#').to_lowercase();
-
-        note_tags.iter().any(|tag| {
-            let tag = tag.to_lowercase();
-
-            tag == want || tag.starts_with(&format!("{want}/"))
-        })
-    })
 }
 
 /// Order notes by modification time (newest first) and keep at most `limit`.
@@ -100,24 +87,5 @@ mod tests {
         let top = top_n(vec![note("/z.md", when), note("/a.md", when)], 10);
 
         assert_eq!(paths(&top), ["/a.md", "/z.md"]);
-    }
-
-    #[test]
-    fn matches_tags_requires_all_and_is_case_insensitive() {
-        let note_tags = vec!["Work".to_string(), "bug/auth".to_string()];
-
-        // All requested tags must be present (case-insensitively).
-        assert!(matches_tags(&note_tags, &["work".into()]));
-        assert!(matches_tags(&note_tags, &["#work".into(), "bug/auth".into()]));
-        assert!(!matches_tags(&note_tags, &["work".into(), "idea".into()]));
-    }
-
-    #[test]
-    fn matches_tags_treats_a_parent_as_matching_its_children() {
-        let note_tags = vec!["work/project".to_string()];
-
-        // Requesting the parent matches the nested tag, but not a mere prefix of a segment.
-        assert!(matches_tags(&note_tags, &["work".into()]));
-        assert!(!matches_tags(&note_tags, &["wor".into()]));
     }
 }

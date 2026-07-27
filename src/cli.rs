@@ -49,6 +49,30 @@ pub enum Command {
         #[arg(long = "tag")]
         tags: Vec<String>,
     },
+    /// Search note bodies for text (newest first).
+    Search {
+        /// Text to look for. Matched literally, not as a pattern.
+        query: String,
+        /// Maximum number of notes to show.
+        #[arg(short = 'n', long, default_value_t = 10)]
+        limit: usize,
+        /// Restrict to a single source: a custom folder's name, or `journal` for the built-in journal.
+        #[arg(long)]
+        folder: Option<String>,
+        /// Only search notes carrying this tag (repeatable; every listed tag must match). Matches nested tags too, so
+        /// `--tag work` also matches `work/project`.
+        #[arg(long = "tag")]
+        tags: Vec<String>,
+        /// Lines of context to show either side of each match.
+        #[arg(short = 'C', long, default_value_t = 0)]
+        context: usize,
+        /// Match the query's case exactly (matching is case-insensitive by default).
+        #[arg(short = 's', long)]
+        case_sensitive: bool,
+        /// Print only the paths of matching notes, one per line.
+        #[arg(short = 'l', long)]
+        files: bool,
+    },
     /// List every tag and how many notes use it.
     Tags {
         /// Restrict to a single source: a custom folder's name, or `journal` for the built-in journal.

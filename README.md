@@ -47,6 +47,14 @@ selfnotes list --folder journal # only the built-in journal
 selfnotes list --folder ticket  # only the `ticket` folder
 selfnotes list --tag work       # only entries tagged #work (repeatable; all must match)
 
+selfnotes search "login bug"            # find notes whose text contains it, newest first
+selfnotes search login -C 2             # show 2 lines of context around each match
+selfnotes search login -n 20            # show up to 20 notes
+selfnotes search login --folder ticket  # only the `ticket` folder
+selfnotes search login --tag work       # only notes tagged #work (repeatable; all must match)
+selfnotes search LOGIN --case-sensitive # exact case (matching is case-insensitive by default)
+selfnotes search login --files          # print only the matching notes' paths
+
 selfnotes tags                 # list every tag with a note count, most-used first
 selfnotes tags --sort name     # alphabetical instead
 selfnotes tags --folder ticket # only tags in the `ticket` folder
@@ -87,6 +95,42 @@ Creating an entry never overwrites an existing file: if the target already exist
 ```
 
 Pass `-n`/`--limit` to change how many entries are shown (default 10). Pass `--folder <name>` to restrict the listing to a single source: a custom folder's name, or the reserved value `journal` for the built-in journal. Dotfiles are skipped, and a missing folder directory simply contributes nothing.
+
+## Searching
+
+`selfnotes search <query>` (aliased as `selfnotes grep`) scans the text of every note and prints the ones that contain the query, newest first. The query is matched literally, not as a regular expression, and matching is case-insensitive unless you pass `-s`/`--case-sensitive`.
+
+Each note gets a header (its source, path relative to the journal root, frontmatter title if it has one, and how many of its lines matched) followed by the matching lines, each prefixed with its line number in the file:
+
+```
+$ selfnotes search "login bug"
+ideas  ideas/caps.md  [1 line]
+      5: LOGIN BUG in caps.
+
+journal  2026/07/27.md  (Sprint planning)  [2 lines]
+      8: Discussed the login bug at length.
+  ...
+     17: The login bug again, near the end.
+```
+
+Line numbers count from the top of the file, frontmatter included, so they line up with what your editor shows. The `...` marks lines skipped between two runs of matches in the same note.
+
+Pass `-C`/`--context <n>` to show `n` lines either side of each match. Context lines are marked with `-` instead of `:`, and windows that overlap are merged into a single run rather than repeating lines:
+
+```
+$ selfnotes search "login bug" -C 1
+journal  2026/07/27.md  (Sprint planning)  [2 lines]
+      7-
+      8: Discussed the login bug at length.
+      9- Also: deploy pipeline is flaky.
+  ...
+     16-
+     17: The login bug again, near the end.
+```
+
+Search accepts the same filters as listing: `-n`/`--limit` (default 10) caps how many notes are shown, `--folder <name>` restricts to one source, and `--tag <tag>` (repeatable) keeps only notes carrying every listed tag, with the same case-insensitive, nested-tag matching `list --tag` uses. Pass `-l`/`--files` to print just the paths of the matching notes, one per line, which is convenient for piping into another tool.
+
+Only a note's body is searched: a `+++` frontmatter block at the top is skipped, so a search for `tags` does not match every tagged note's metadata. Unlike tag and link parsing, fenced code blocks and inline code spans *are* searched, since finding a command or a snippet you wrote down is usually the point.
 
 ## Tags and links
 

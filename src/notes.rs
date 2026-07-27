@@ -4,7 +4,7 @@
 //! database: `#tag` hashtags in the body, an optional `+++`-delimited TOML frontmatter carrying `tags = [...]` (plus a
 //! human `title` and `aliases` a note can be addressed by), and `[[note-name]]` wikilinks between notes. This module
 //! walks the same journal and custom-folder locations that listing does, then parses those conventions so the `tags`,
-//! `links`, and `open` commands (and `list --tag`) can query them.
+//! `links`, `open`, and `search` commands (and `list --tag`) can query them.
 
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -256,6 +256,35 @@ pub fn parse(content: &str, hash_min_len: usize) -> Parsed {
 /// `hash_min_len`.
 pub fn extract_tags(content: &str, hash_min_len: usize) -> Vec<String> {
     parse(content, hash_min_len).tags
+}
+
+/// A note's prose: everything after a leading `+++` frontmatter block, paired with the 1-based number of the file line
+/// it starts on.
+///
+/// Searching reports line numbers against the whole file, so the offset matters: without frontmatter the body is the
+/// whole content and starts on line 1.
+pub fn body(content: &str) -> (&str, usize) {
+    let (_, body) = split_frontmatter(content);
+    // `body` is a suffix of `content`, so what precedes it is exactly the frontmatter block that was skipped.
+    let skipped = &content[..content.len() - body.len()];
+
+    (body, skipped.lines().count() + 1)
+}
+
+/// Whether `note_tags` satisfies every tag in `wanted`, the shared semantics behind `list --tag` and `search --tag`.
+///
+/// Matching is case-insensitive, a leading `#` on a requested tag is ignored, and a requested tag also matches its
+/// nested children, so `work` matches `work/project`. An empty `wanted` matches every note.
+pub fn matches_tags(note_tags: &[String], wanted: &[String]) -> bool {
+    wanted.iter().all(|want| {
+        let want = want.trim_start_matches('#').to_lowercase();
+
+        note_tags.iter().any(|tag| {
+            let tag = tag.to_lowercase();
+
+            tag == want || tag.starts_with(&format!("{want}/"))
+        })
+    })
 }
 
 /// Split a leading `+++`-delimited TOML frontmatter block from the body.
@@ -645,6 +674,36 @@ mod tests {
         // Frontmatter first (with the leading `#` stripped), then new inline tags; `work` is not repeated. Frontmatter
         // tags are explicit, so the hash heuristic never touches them.
         assert_eq!(extract_tags(content, HASH_MIN), ["work", "bug/auth", "idea"]);
+    }
+
+    #[test]
+    fn body_starts_after_the_frontmatter() {
+        // Without frontmatter the whole content is the body, starting on line 1.
+        assert_eq!(body("# Title\n\nprose\n"), ("# Title\n\nprose\n", 1));
+        // With it, the body starts on the line after the closing fence.
+        assert_eq!(body("+++\ntags = []\n+++\nprose\n"), ("prose\n", 4));
+        // An unterminated fence is not frontmatter, so nothing is skipped.
+        assert_eq!(body("+++\nprose\n"), ("+++\nprose\n", 1));
+    }
+
+    #[test]
+    fn matches_tags_requires_all_and_is_case_insensitive() {
+        let note_tags = vec!["Work".to_string(), "bug/auth".to_string()];
+
+        // All requested tags must be present (case-insensitively), and no filter matches anything.
+        assert!(matches_tags(&note_tags, &[]));
+        assert!(matches_tags(&note_tags, &["work".into()]));
+        assert!(matches_tags(&note_tags, &["#work".into(), "bug/auth".into()]));
+        assert!(!matches_tags(&note_tags, &["work".into(), "idea".into()]));
+    }
+
+    #[test]
+    fn matches_tags_treats_a_parent_as_matching_its_children() {
+        let note_tags = vec!["work/project".to_string()];
+
+        // Requesting the parent matches the nested tag, but not a mere prefix of a segment.
+        assert!(matches_tags(&note_tags, &["work".into()]));
+        assert!(!matches_tags(&note_tags, &["wor".into()]));
     }
 
     #[test]

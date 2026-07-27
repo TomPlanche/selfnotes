@@ -6,6 +6,7 @@ mod config;
 mod entry;
 mod list;
 mod notes;
+mod search;
 mod template;
 
 use std::path::Path;
@@ -76,6 +77,30 @@ fn main() -> Result<()> {
 
             print_listings(&config, &listings)?;
         },
+        Command::Search {
+            query,
+            limit,
+            folder,
+            tags,
+            context,
+            case_sensitive,
+            files,
+        } => {
+            let config = config::load()?;
+            let hits = search::search(
+                &config,
+                &search::Query {
+                    text: &query,
+                    folder: folder.as_deref(),
+                    tags: &tags,
+                    case_sensitive,
+                    context,
+                    limit,
+                },
+            )?;
+
+            print_search(&config, &hits, files)?;
+        },
         Command::Tags { folder, sort } => {
             let config = config::load()?;
             let index = notes::build_index(&config, folder.as_deref())?;
@@ -119,6 +144,66 @@ fn print_listings(config: &Config, listings: &[notes::NoteFile]) -> Result<()> {
         let shown = listing.path.strip_prefix(&root).unwrap_or(&listing.path).display();
 
         println!("{when}  {:<width$}  {shown}", listing.source);
+    }
+
+    Ok(())
+}
+
+/// Print search hits: a header per note, then its matching lines.
+///
+/// Each line is prefixed with its file line number and a marker, `:` for a match and `-` for context, so the two are
+/// distinguishable when several lines are shown. `files_only` reduces the output to bare paths, one per line, for
+/// piping into other tools.
+fn print_search(config: &Config, hits: &[search::Hit], files_only: bool) -> Result<()> {
+    if hits.is_empty() {
+        println!("No matches found.");
+
+        return Ok(());
+    }
+
+    let root = config.resolved_journal_root()?;
+    let rel = |path: &Path| path.strip_prefix(&root).unwrap_or(path).display().to_string();
+
+    if files_only {
+        for hit in hits {
+            println!("{}", rel(&hit.file.path));
+        }
+
+        return Ok(());
+    }
+
+    for (index, hit) in hits.iter().enumerate() {
+        // Blank line between notes, so the headers stand out from the lines beneath them.
+        if index > 0 {
+            println!();
+        }
+
+        let count = hit.matches();
+        let lines = if count == 1 { "line" } else { "lines" };
+        let title = hit
+            .title
+            .as_ref()
+            .map_or_else(String::new, |title| format!("  ({title})"));
+
+        println!("{}  {}{title}  [{count} {lines}]", hit.file.source, rel(&hit.file.path));
+
+        for (nth, snippet) in hit.snippets.iter().enumerate() {
+            // Mark the gap between snippets, which skips at least one line.
+            if nth > 0 {
+                println!("  ...");
+            }
+
+            for line in &snippet.lines {
+                let marker = if line.matched { ':' } else { '-' };
+
+                // A blank line prints bare, so the output carries no trailing whitespace.
+                if line.text.is_empty() {
+                    println!("  {:>5}{marker}", line.number);
+                } else {
+                    println!("  {:>5}{marker} {}", line.number, line.text);
+                }
+            }
+        }
     }
 
     Ok(())
