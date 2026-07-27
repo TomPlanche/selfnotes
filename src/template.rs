@@ -1,11 +1,15 @@
 //! Template rendering via simple `{{placeholder}}` substitution.
 
-use chrono::{DateTime, Datelike, Local};
+use chrono::{DateTime, Datelike, Local, NaiveDate};
 
 /// Values available for substitution when rendering an entry template.
 pub struct Context {
-    /// Timestamp used for all date/time placeholders.
+    /// Timestamp used for the time-of-day placeholders (`{{time}}`, and the time half of `{{datetime}}`). This is
+    /// always the current moment, even for an entry dated another day.
     pub now: DateTime<Local>,
+    /// The day the entry is *for*, which drives every date placeholder. It is today unless a journal entry was
+    /// requested for another date.
+    pub date: NaiveDate,
     /// Entry name, used by custom folders (`{{name}}`).
     pub name: Option<String>,
     /// Folder name under which `fields` are exposed, e.g. `ticket` makes a
@@ -18,12 +22,23 @@ pub struct Context {
 impl Context {
     /// Build a context for the current moment.
     pub fn now() -> Self {
+        let now = Local::now();
+
         Self {
-            now: Local::now(),
+            now,
+            date: now.date_naive(),
             name: None,
             field_prefix: None,
             fields: Vec::new(),
         }
+    }
+
+    /// Build a context for an entry dated `date`.
+    ///
+    /// Only the date placeholders move: `{{time}}` still reports the current clock time, since that is when the entry
+    /// is actually being written. So backfilling yesterday renders `{{date}}` as yesterday and `{{time}}` as now.
+    pub fn for_date(date: NaiveDate) -> Self {
+        Self { date, ..Self::now() }
     }
 
     /// Attach an entry name.
@@ -55,13 +70,13 @@ impl Context {
         }
 
         let value = match key {
-            "date" => self.now.format("%Y-%m-%d").to_string(),
-            "datetime" => self.now.format("%Y-%m-%d %H:%M").to_string(),
+            "date" => self.date.format("%Y-%m-%d").to_string(),
+            "datetime" => format!("{} {}", self.date.format("%Y-%m-%d"), self.now.format("%H:%M")),
             "time" => self.now.format("%H:%M").to_string(),
-            "year" => format!("{:04}", self.now.year()),
-            "month" => format!("{:02}", self.now.month()),
-            "day" => format!("{:02}", self.now.day()),
-            "weekday" => self.now.format("%A").to_string(),
+            "year" => format!("{:04}", self.date.year()),
+            "month" => format!("{:02}", self.date.month()),
+            "day" => format!("{:02}", self.date.day()),
+            "weekday" => self.date.format("%A").to_string(),
             "name" => self.name.clone()?,
             _ => return None,
         };
@@ -233,8 +248,11 @@ mod tests {
     use chrono::TimeZone;
 
     fn fixed_ctx() -> Context {
+        let now = Local.with_ymd_and_hms(2026, 7, 13, 9, 5, 0).unwrap();
+
         Context {
-            now: Local.with_ymd_and_hms(2026, 7, 13, 9, 5, 0).unwrap(),
+            now,
+            date: now.date_naive(),
             name: Some("login-bug".into()),
             field_prefix: None,
             fields: Vec::new(),
@@ -254,6 +272,23 @@ mod tests {
     }
 
     #[test]
+    fn date_placeholders_follow_the_entry_date_and_time_follows_the_clock() {
+        // An entry dated three days before the context's `now`, as `--date -3` produces.
+        let ctx = Context {
+            date: NaiveDate::from_ymd_opt(2026, 7, 10).unwrap(),
+            ..fixed_ctx()
+        };
+
+        let out = render(
+            "{{date}} {{weekday}} {{year}}-{{month}}-{{day}}\n{{time}}\n{{datetime}}",
+            &ctx,
+        );
+
+        // Every date placeholder is the entry's day; the time stays the wall clock, and `datetime` combines the two.
+        assert_eq!(out, "2026-07-10 Friday 2026-07-10\n09:05\n2026-07-10 09:05");
+    }
+
+    #[test]
     fn substitutes_name() {
         assert_eq!(render("# {{name}}", &fixed_ctx()), "# login-bug");
     }
@@ -265,12 +300,7 @@ mod tests {
 
     #[test]
     fn missing_name_is_left_intact() {
-        let ctx = Context {
-            now: Local::now(),
-            name: None,
-            field_prefix: None,
-            fields: Vec::new(),
-        };
+        let ctx = Context::now();
 
         assert_eq!(render("{{name}}", &ctx), "{{name}}");
     }
@@ -314,10 +344,8 @@ mod tests {
     #[test]
     fn skips_block_when_field_is_missing() {
         let ctx = Context {
-            now: Local.with_ymd_and_hms(2026, 7, 13, 9, 5, 0).unwrap(),
             name: None,
-            field_prefix: None,
-            fields: Vec::new(),
+            ..fixed_ctx()
         };
 
         assert_eq!(render("{{?name}}Name: {{name}}{{/name}}", &ctx), "");

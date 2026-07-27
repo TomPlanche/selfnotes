@@ -3,6 +3,7 @@
 
 mod cli;
 mod config;
+mod date;
 mod entry;
 mod list;
 mod notes;
@@ -12,7 +13,7 @@ mod template;
 use std::path::Path;
 
 use anyhow::{Context as _, Result, bail};
-use chrono::{DateTime, Local};
+use chrono::{DateTime, Local, NaiveDate};
 use clap::Parser;
 use dialoguer::theme::ColorfulTheme;
 use dialoguer::{Input, Select};
@@ -25,12 +26,16 @@ use notes::{Index, IndexedNote};
 fn main() -> Result<()> {
     let args = Cli::parse();
     // A bare invocation creates today's journal entry.
-    let command = args.command.unwrap_or(Command::Journal { no_open: false });
+    let command = args.command.unwrap_or(Command::Journal {
+        date: None,
+        no_open: false,
+    });
 
     match command {
-        Command::Journal { no_open } => {
+        Command::Journal { date, no_open } => {
             let config = config::load()?;
-            let entry = entry::create_journal(&config)?;
+            let date = journal_date(date.as_deref())?;
+            let entry = entry::create_journal(&config, date)?;
 
             report(&entry);
             maybe_open(&config, &entry, no_open);
@@ -123,6 +128,13 @@ fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Resolve the requested journal date against today's, defaulting to today when `--date` was not given.
+fn journal_date(spec: Option<&str>) -> Result<NaiveDate> {
+    let today = Local::now().date_naive();
+
+    spec.map_or(Ok(today), |spec| date::parse(spec, today))
 }
 
 /// Print recent entries as `<modified>  <source>  <relative-path>`, newest first.

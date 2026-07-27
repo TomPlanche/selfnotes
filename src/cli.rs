@@ -19,8 +19,12 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    /// Create or open today's journal entry (default action).
+    /// Create or open a journal entry, today's by default.
     Journal {
+        /// Which day to create or open: `YYYY-MM-DD`, `today`/`yesterday`/`tomorrow`, or a signed day offset such as
+        /// `-1` or `+3`.
+        #[arg(short, long, value_name = "DATE", allow_hyphen_values = true)]
+        date: Option<String>,
         /// Skip opening the entry in your editor after creating it.
         #[arg(long)]
         no_open: bool,

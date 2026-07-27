@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result, bail};
-use chrono::Datelike;
+use chrono::{Datelike, NaiveDate};
 
 use crate::config::{self, Config, FolderConfig};
 use crate::template::{self, Context, Cursor};
@@ -18,16 +18,18 @@ pub struct Entry {
     pub cursor: Option<Cursor>,
 }
 
-/// Create today's journal entry: `<root>/YYYY/MM/DD.<format>`.
-pub fn create_journal(config: &Config) -> Result<Entry> {
+/// Create the journal entry for `date`: `<root>/YYYY/MM/DD.<format>`.
+///
+/// Nothing about a past or future date is special-cased: the path and the template's date placeholders both follow
+/// `date`, so backfilling a day produces exactly the file that day would have produced.
+pub fn create_journal(config: &Config, date: NaiveDate) -> Result<Entry> {
     let root = config.resolved_journal_root()?;
-    let ctx = Context::now();
-    let now = ctx.now;
+    let ctx = Context::for_date(date);
 
     let dir = root
-        .join(format!("{:04}", now.year()))
-        .join(format!("{:02}", now.month()));
-    let file_name = format!("{:02}.{}", now.day(), config.journal_format());
+        .join(format!("{:04}", date.year()))
+        .join(format!("{:02}", date.month()));
+    let file_name = format!("{:02}.{}", date.day(), config.journal_format());
     let path = dir.join(file_name);
 
     let template = config

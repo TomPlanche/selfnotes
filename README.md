@@ -35,6 +35,10 @@ The file extension (`md` by default) is configurable globally, per journal, and 
 selfnotes                        # create today's journal entry and open it
 selfnotes journal                # same as above
 selfnotes journal --no-open      # create it without launching the editor
+selfnotes journal --date yesterday    # open (or backfill) yesterday's entry
+selfnotes journal -d -1               # same thing, as a day offset
+selfnotes journal -d 2026-07-13       # an absolute date
+selfnotes journal -d tomorrow         # tomorrow's entry, ready for notes
 selfnotes new                    # pick a folder, then enter a name (interactive)
 selfnotes new ticket             # skip the folder picker, prompt for a name
 selfnotes new ticket login-bug   # pass both directly
@@ -84,6 +88,22 @@ The editor comes from the `editor` config key, falling back to `$EDITOR`. Pass `
 
 Creating an entry never overwrites an existing file: if the target already exists, it is left untouched (and reopened).
 
+## Journal dates
+
+A journal entry defaults to today, but `-d`/`--date` picks another day, so you can reopen an earlier entry or backfill one you missed. Three forms are accepted:
+
+| Form | Example | Meaning |
+| ---- | ------- | ------- |
+| `YYYY-MM-DD` | `-d 2026-07-13` | that exact day |
+| a name | `-d yesterday` | `today`, `yesterday`, or `tomorrow` |
+| a signed day offset | `-d -1`, `-d +3` | that many days from today |
+
+The sign on an offset is required, so a bare `-d 3` is an error rather than a guess. Names are case-insensitive. Future dates are allowed: `-d tomorrow` prepares tomorrow's entry.
+
+Nothing about a past or future date is special-cased. The entry lands at its usual `<journal-root>/YYYY/MM/DD.<format>` path, gets the same template and `default_tags`, and is opened in your editor exactly as today's entry would be. If the file already exists it is opened untouched, which is what makes `selfnotes -d yesterday` the way to reread yesterday.
+
+In the rendered template, the date placeholders describe the day the entry is *for*, while `{{time}}` stays the current clock time, since that is when you are actually writing. Backfilling the 13th on the 27th at 09:05 renders `{{date}}` as `2026-07-13` and `{{time}}` as `09:05`.
+
 ## Listing entries
 
 `selfnotes list` (aliased as `selfnotes recent`) scans the journal and every custom folder and prints the entries most recently modified, newest first, so you can find a note without opening the editor. Each line is the modification time, the source (`journal` or a folder name), and the entry path relative to the journal root:
@@ -98,7 +118,7 @@ Pass `-n`/`--limit` to change how many entries are shown (default 10). Pass `--f
 
 ## Searching
 
-`selfnotes search <query>` (aliased as `selfnotes grep`) scans the text of every note and prints the ones that contain the query, newest first. The query is matched literally, not as a regular expression, and matching is case-insensitive unless you pass `-s`/`--case-sensitive`.
+`selfnotes search <query>` scans the text of every note and prints the ones that contain the query, newest first. The query is matched literally, not as a regular expression, and matching is case-insensitive unless you pass `-s`/`--case-sensitive`.
 
 Each note gets a header (its source, path relative to the journal root, frontmatter title if it has one, and how many of its lines matched) followed by the matching lines, each prefixed with its line number in the file:
 
@@ -357,15 +377,17 @@ Templates are plain files referenced by `template_file`. When no template is con
 
 | Placeholder    | Example            | Notes                      |
 | -------------- | ------------------ | -------------------------- |
-| `{{date}}`     | `2026-07-13`       |                            |
-| `{{datetime}}` | `2026-07-13 09:05` |                            |
-| `{{time}}`     | `09:05`            |                            |
-| `{{year}}`     | `2026`             |                            |
+| `{{date}}`     | `2026-07-13`       | the entry's date           |
+| `{{datetime}}` | `2026-07-13 09:05` | the entry's date, the current time |
+| `{{time}}`     | `09:05`            | always the current time    |
+| `{{year}}`     | `2026`             | from the entry's date      |
 | `{{month}}`    | `07`               | zero-padded                |
 | `{{day}}`      | `13`               | zero-padded                |
-| `{{weekday}}`  | `Monday`           |                            |
+| `{{weekday}}`  | `Monday`           | from the entry's date      |
 | `{{name}}`     | `login-bug`        | custom-folder entries only |
 | `{{<folder-name>.<field>}}` | `high` | custom folder fields, e.g. `{{ticket.priority}}` |
+
+"The entry's date" is today unless `selfnotes journal --date` asked for another day (see [Journal dates](#journal-dates)); for custom-folder entries it is always today.
 
 Unknown placeholders are left untouched so typos stay visible.
 
