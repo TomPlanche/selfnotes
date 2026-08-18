@@ -26,6 +26,11 @@ pub const DEFAULT_CURSOR_FORMAT: &str = "{path}:{line}:{column}";
 /// hashes are never mistaken for tags. See [`Config::hash_tag_min_len`].
 pub const DEFAULT_HASH_TAG_MIN_LEN: usize = 6;
 
+/// Default section of the previous journal entry read by the `{{last_day.*}}` template placeholders.
+///
+/// See [`Config::journal_carry_over_section`].
+pub const DEFAULT_CARRY_OVER_SECTION: &str = "Today";
+
 /// Top-level configuration, deserialized from TOML.
 #[derive(Debug, Default, Clone, Deserialize, Serialize)]
 pub struct Config {
@@ -78,6 +83,9 @@ pub struct JournalConfig {
     /// Tags seeded into the frontmatter of new journal entries, in addition to the global `default_tags`.
     #[serde(default)]
     pub default_tags: Vec<String>,
+    /// Section of the previous entry that the `{{last_day.*}}` template placeholders read their checklist from.
+    /// Defaults to [`DEFAULT_CARRY_OVER_SECTION`].
+    pub carry_over_section: Option<String>,
 }
 
 /// Settings for a user-defined folder such as `ticket`.
@@ -182,6 +190,10 @@ impl Config {
             if !other_journal.default_tags.is_empty() {
                 journal.default_tags = other_journal.default_tags;
             }
+
+            if other_journal.carry_over_section.is_some() {
+                journal.carry_over_section = other_journal.carry_over_section;
+            }
         }
         // A local folder replaces the global one of the same name;
         // otherwise it is appended.
@@ -225,6 +237,18 @@ impl Config {
             .and_then(|journal| journal.format.as_deref())
             .or(self.format.as_deref())
             .unwrap_or(DEFAULT_FORMAT)
+    }
+
+    /// Effective section of the previous entry that the `{{last_day.*}}` placeholders read.
+    ///
+    /// A blank value falls back to the default, since a nameless section matches nothing.
+    pub fn journal_carry_over_section(&self) -> &str {
+        self.journal
+            .as_ref()
+            .and_then(|journal| journal.carry_over_section.as_deref())
+            .map(str::trim)
+            .filter(|section| !section.is_empty())
+            .unwrap_or(DEFAULT_CARRY_OVER_SECTION)
     }
 
     /// Effective extension for the given folder.

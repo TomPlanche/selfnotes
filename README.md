@@ -296,6 +296,8 @@ hash_tag_min_len = 6
 template_file = "~/.config/selfnotes/templates/journal.md"
 # Journal entries are also tagged #daily.
 default_tags = ["daily"]
+# Section of the previous entry that {{last_day.tasks}} and {{last_day.todo}} read (default "Today").
+carry_over_section = "Today"
 
 [[custom_folders]]
 name = "ticket"
@@ -386,10 +388,59 @@ Templates are plain files referenced by `template_file`. When no template is con
 | `{{weekday}}`  | `Monday`           | from the entry's date      |
 | `{{name}}`     | `login-bug`        | custom-folder entries only |
 | `{{<folder-name>.<field>}}` | `high` | custom folder fields, e.g. `{{ticket.priority}}` |
+| `{{last_day.tasks}}` | `- [x] ship it` | journal entries only, see [Carrying the last day forward](#carrying-the-last-day-forward) |
+| `{{last_day.todo}}`  | `- [ ] ship it` | journal entries only, the unfinished half of the same list |
+| `{{last_day.weekday}}` | `Wednesday`  | journal entries only, the day that list came from |
+| `{{last_day.date}}`  | `2026-08-12`     | journal entries only, that same day as a date |
 
 "The entry's date" is today unless `selfnotes journal --date` asked for another day (see [Journal dates](#journal-dates)); for custom-folder entries it is always today.
 
 Unknown placeholders are left untouched so typos stay visible.
+
+A placeholder that resolves to several lines keeps its own indentation on every line, as long as nothing but whitespace precedes it. That is what lets a checklist sit under the list item it belongs to.
+
+### Carrying the last day forward
+
+A day rarely ends with everything ticked off, so a new journal entry can start from the last one. Four placeholders describe the most recent entry *before* the day being created:
+
+| Placeholder            | What it renders |
+| ---------------------- | --------------- |
+| `{{last_day.tasks}}`   | every checkbox item of its carry-over section, ticked or not |
+| `{{last_day.todo}}`    | only the items still unticked |
+| `{{last_day.weekday}}` | the weekday that entry is for, e.g. `Wednesday` |
+| `{{last_day.date}}`    | that same day as `YYYY-MM-DD` |
+
+```markdown
+# Daily {{date}}
+
+- {{last_day.weekday}}:
+  {{last_day.tasks}}
+
+- Today:
+  {{last_day.todo}}
+```
+
+Creating Tuesday the 18th after an entry for Monday the 17th whose `Today` section held `- [x] ship it` and `- [ ] write the postmortem` gives:
+
+```markdown
+# Daily 2026-08-18
+
+- Monday:
+  - [x] ship it
+  - [ ] write the postmortem
+
+- Today:
+  - [ ] write the postmortem
+```
+
+The details, in short:
+
+- **Which entry.** The most recent one before the new day, whatever the gap: a Monday picks up the Friday before it. A backfilled `--date` reads the entry before *that* day, so backfilling stays consistent.
+- **Which day is named.** `{{last_day.weekday}}` and `{{last_day.date}}` describe the entry the checklist came from, not the calendar day before, so the heading always says where the list under it was taken from. After a week away, the heading names the day a week ago.
+- **Which section.** `Today` by default, matched on its text alone, so a `- Today:` list item and a `## Today` heading both work. Rename it with `carry_over_section` under `[journal]`. Only that section is read, which is what keeps the carried section from being copied forward twice, whatever it is headed with.
+- **Nesting.** Sub-items are kept. An unfinished child of a ticked parent moves up to the parent's level in `{{last_day.todo}}` rather than dangling under an item that is not there.
+- **Marks.** `- [ ]` (and `- []`) is unfinished. `- [x]`, `- [X]`, and one-character conventions like `- [-]` for cancelled all count as finished: they show up in `tasks` but are not carried into `todo`.
+- **Nothing to carry.** With no previous entry, no such section, or no checkboxes in it, `tasks` and `todo` render a single empty bullet (`-`), exactly what a template without them would have left. With no previous entry at all, `{{last_day.weekday}}` falls back to `Last day` so the section still has a heading, and `{{last_day.date}}` is empty (and so can gate a `{{?last_day.date}}...{{/last_day.date}}` block).
 
 ### Conditional blocks
 

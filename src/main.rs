@@ -1,6 +1,7 @@
 //! `selfnotes`: a CLI that manages a journal-style notes filesystem.
 //! `selfnotes -h` for full usage information.
 
+mod carryover;
 mod cli;
 mod config;
 mod date;

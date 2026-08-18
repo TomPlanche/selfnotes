@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context as _, Result, bail};
 use chrono::{Datelike, NaiveDate};
 
+use crate::carryover;
 use crate::config::{self, Config, FolderConfig};
 use crate::template::{self, Context, Cursor};
 
@@ -20,17 +21,33 @@ pub struct Entry {
 
 /// Create the journal entry for `date`: `<root>/YYYY/MM/DD.<format>`.
 ///
-/// Nothing about a past or future date is special-cased: the path and the template's date placeholders both follow
-/// `date`, so backfilling a day produces exactly the file that day would have produced.
+/// Nothing about a past or future date is special-cased: the path, the template's date placeholders, and the entry
+/// whose checklist is carried forward all follow `date`, so backfilling a day produces exactly the file that day would
+/// have produced.
 pub fn create_journal(config: &Config, date: NaiveDate) -> Result<Entry> {
     let root = config.resolved_journal_root()?;
-    let ctx = Context::for_date(date);
 
     let dir = root
         .join(format!("{:04}", date.year()))
         .join(format!("{:02}", date.month()));
     let file_name = format!("{:02}.{}", date.day(), config.journal_format());
     let path = dir.join(file_name);
+
+    let mut ctx = Context::for_date(date);
+
+    // Reading the previous entry only pays off for a file about to be written: an existing one is handed back
+    // untouched, so there is nothing to render into it.
+    if !path.exists() {
+        ctx = ctx.with_fields(
+            carryover::PREFIX,
+            carryover::last_day_fields(
+                &root,
+                config.journal_format(),
+                config.journal_carry_over_section(),
+                date,
+            ),
+        );
+    }
 
     let template = config
         .journal

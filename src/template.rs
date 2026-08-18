@@ -12,10 +12,11 @@ pub struct Context {
     pub date: NaiveDate,
     /// Entry name, used by custom folders (`{{name}}`).
     pub name: Option<String>,
-    /// Folder name under which `fields` are exposed, e.g. `ticket` makes a
-    /// field available as `{{ticket.<field>}}`.
+    /// Namespace the `fields` are exposed under, e.g. `ticket` makes a field available as `{{ticket.<field>}}`. It is
+    /// the folder name for a custom-folder entry, and [`carryover::PREFIX`](crate::carryover::PREFIX) for a journal
+    /// one.
     pub field_prefix: Option<String>,
-    /// Custom folder fields, exposed as `{{<folder>.<field>}}`.
+    /// Namespaced values, exposed as `{{<prefix>.<key>}}`.
     pub fields: Vec<(String, String)>,
 }
 
@@ -47,8 +48,8 @@ impl Context {
         self
     }
 
-    /// Attach custom folder fields, exposed as `{{<prefix>.<field>}}` where
-    /// `prefix` is the folder name.
+    /// Attach namespaced values, exposed as `{{<prefix>.<key>}}`: a custom folder's fields under the folder name, or
+    /// the previous entry's checklist under [`carryover::PREFIX`](crate::carryover::PREFIX).
     pub fn with_fields(mut self, prefix: impl Into<String>, fields: Vec<(String, String)>) -> Self {
         self.field_prefix = Some(prefix.into());
         self.fields = fields;
@@ -184,7 +185,7 @@ impl Renderer<'_> {
                 rest = after_tag;
             } else {
                 match self.ctx.lookup(tag) {
-                    Some(value) => self.output.push_str(&value),
+                    Some(value) => self.push_value(&value),
                     // Preserve the original, unresolved placeholder.
                     None => push_tag(&mut self.output, raw),
                 }
@@ -193,6 +194,42 @@ impl Renderer<'_> {
         }
 
         self.output.push_str(rest);
+    }
+
+    /// Append a substituted value, keeping a multi-line one aligned under its placeholder.
+    ///
+    /// A value like a carried-over checklist is many lines, and a template puts the placeholder where those lines
+    /// belong (`  {{last_day.tasks}}`), so every line after the first repeats the indentation the placeholder itself
+    /// sits at. Only whitespace may precede the placeholder on its line; anything else means the alignment was not
+    /// asked for, and a single-line value is untouched either way.
+    fn push_value(&mut self, value: &str) {
+        if !value.contains('\n') {
+            self.output.push_str(value);
+            return;
+        }
+
+        let indent = self.line_indent();
+
+        for (index, line) in value.split('\n').enumerate() {
+            if index > 0 {
+                self.output.push('\n');
+                self.output.push_str(&indent);
+            }
+
+            self.output.push_str(line);
+        }
+    }
+
+    /// The indentation of the line being written, or nothing when the line already holds more than whitespace.
+    fn line_indent(&self) -> String {
+        let start = self.output.rfind('\n').map_or(0, |index| index + 1);
+        let current = &self.output[start..];
+
+        if current.chars().all(char::is_whitespace) {
+            current.to_string()
+        } else {
+            String::new()
+        }
     }
 }
 
@@ -404,5 +441,31 @@ mod tests {
         let rendered = super::render("{{?ticket.priority}}{{cursor}}{{/ticket.priority}}done", &ctx);
         assert_eq!(rendered.content, "done");
         assert_eq!(rendered.cursor, None);
+    }
+
+    #[test]
+    fn a_multi_line_value_keeps_the_placeholder_indentation() {
+        let ctx = fixed_ctx().with_fields("last_day", vec![("todo".into(), "- [ ] a\n  - [ ] b".into())]);
+
+        assert_eq!(
+            render("- Today:\n  {{last_day.todo}}\n", &ctx),
+            "- Today:\n  - [ ] a\n    - [ ] b\n"
+        );
+    }
+
+    #[test]
+    fn a_multi_line_value_after_other_text_is_not_re_indented() {
+        let ctx = fixed_ctx().with_fields("last_day", vec![("todo".into(), "- [ ] a\n- [ ] b".into())]);
+
+        assert_eq!(render("Left: {{last_day.todo}}", &ctx), "Left: - [ ] a\n- [ ] b");
+    }
+
+    #[test]
+    fn the_cursor_follows_a_multi_line_value() {
+        let ctx = fixed_ctx().with_fields("last_day", vec![("todo".into(), "- [ ] a\n- [ ] b".into())]);
+
+        let rendered = super::render("{{last_day.todo}}\n{{cursor}}", &ctx);
+
+        assert_eq!(rendered.cursor, Some(Cursor { line: 3, column: 1 }));
     }
 }
