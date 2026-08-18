@@ -407,7 +407,7 @@ A day rarely ends with everything ticked off, so a new journal entry can start f
 | ---------------------- | --------------- |
 | `{{last_day.tasks}}`   | every checkbox item of its carry-over section, ticked or not |
 | `{{last_day.todo}}`    | only the items still unticked |
-| `{{last_day.weekday}}` | the weekday that entry is for, e.g. `Wednesday` |
+| `{{last_day.weekday}}` | the weekday that entry is for, e.g. `Wednesday`, so the section is headed by a day |
 | `{{last_day.date}}`    | that same day as `YYYY-MM-DD` |
 
 ```markdown
@@ -440,7 +440,7 @@ The details, in short:
 - **Which section.** `Today` by default, matched on its text alone, so a `- Today:` list item and a `## Today` heading both work. Rename it with `carry_over_section` under `[journal]`. Only that section is read, which is what keeps the carried section from being copied forward twice, whatever it is headed with.
 - **Nesting.** Sub-items are kept. An unfinished child of a ticked parent moves up to the parent's level in `{{last_day.todo}}` rather than dangling under an item that is not there.
 - **Marks.** `- [ ]` (and `- []`) is unfinished. `- [x]`, `- [X]`, and one-character conventions like `- [-]` for cancelled all count as finished: they show up in `tasks` but are not carried into `todo`.
-- **Nothing to carry.** With no previous entry, no such section, or no checkboxes in it, `tasks` and `todo` render a single empty bullet (`-`), exactly what a template without them would have left. With no previous entry at all, `{{last_day.weekday}}` falls back to `Last day` so the section still has a heading, and `{{last_day.date}}` is empty (and so can gate a `{{?last_day.date}}...{{/last_day.date}}` block).
+- **Nothing to carry.** With no previous entry, no such section, or no checkboxes in it, `tasks` and `todo` render a single empty bullet (`-`), exactly what a template without them would have left. The heading is still a day: with no earlier entry to name, `{{last_day.weekday}}` and `{{last_day.date}}` fall back to the last working day before the new one, so a Monday says `Friday` rather than `Sunday`.
 
 ### Conditional blocks
 

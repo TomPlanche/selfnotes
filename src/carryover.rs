@@ -2,13 +2,13 @@
 //!
 //! A day rarely ends with everything ticked off, so a new entry starts from the last one: a journal template pulls its
 //! checkboxes in with `{{last_day.tasks}}` (every item, ticked or not) and `{{last_day.todo}}` (only what is still
-//! unfinished), and names the day they came from with `{{last_day.weekday}}` and `{{last_day.date}}`. The checkboxes
-//! are read from one section of the most recent entry before the new day, named by the `journal.carry_over_section`
-//! config key.
+//! unfinished), and names the day they came from with `{{last_day.weekday}}` and `{{last_day.date}}`, so a section is
+//! headed `Wednesday` rather than something generic. The checkboxes are read from one section of the most recent entry
+//! before the new day, named by the `journal.carry_over_section` config key.
 
 use std::path::{Path, PathBuf};
 
-use chrono::NaiveDate;
+use chrono::{Datelike, Days, NaiveDate, Weekday};
 
 /// Prefix the carried values are exposed under, so a template reaches them as `{{last_day.<key>}}`.
 pub const PREFIX: &str = "last_day";
@@ -21,9 +21,6 @@ const TAB_WIDTH: usize = 4;
 
 /// Rendered when nothing is carried over, so the section keeps the empty bullet an untouched template would leave.
 const EMPTY_LIST: &str = "-";
-
-/// Rendered by `{{last_day.weekday}}` when there is no previous entry to name, so the section still has a heading.
-const NO_PREVIOUS_DAY: &str = "Last day";
 
 /// A checkbox item read out of a journal entry.
 #[derive(Debug, PartialEq, Eq)]
@@ -47,24 +44,36 @@ pub fn last_day_fields(root: &Path, format: &str, section: &str, before: NaiveDa
         .as_ref()
         .map(|(_, path)| tasks_in(path, section))
         .unwrap_or_default();
+    let named_day = previous
+        .as_ref()
+        .map_or_else(|| previous_working_day(before), |(date, _)| Some(*date));
 
     vec![
         (
             "weekday".to_string(),
-            previous.as_ref().map_or_else(
-                || NO_PREVIOUS_DAY.to_string(),
-                |(date, _)| date.format("%A").to_string(),
-            ),
+            named_day.map_or_else(String::new, |date| date.format("%A").to_string()),
         ),
         (
             "date".to_string(),
-            previous
-                .as_ref()
-                .map_or_else(String::new, |(date, _)| date.format("%Y-%m-%d").to_string()),
+            named_day.map_or_else(String::new, |date| date.format("%Y-%m-%d").to_string()),
         ),
         ("tasks".to_string(), render(tasks.iter())),
         ("todo".to_string(), render(tasks.iter().filter(|task| !task.checked))),
     ]
+}
+
+/// The last working day before `date`, used to name the section when no earlier entry exists to name it after.
+///
+/// A journal that has not started yet still needs a heading, and the day a Monday looks back on is the Friday before
+/// it rather than Sunday.
+fn previous_working_day(date: NaiveDate) -> Option<NaiveDate> {
+    let mut day = date.checked_sub_days(Days::new(1))?;
+
+    while matches!(day.weekday(), Weekday::Sat | Weekday::Sun) {
+        day = day.checked_sub_days(Days::new(1))?;
+    }
+
+    Some(day)
 }
 
 /// Tasks in the `section` of the entry at `path`.
@@ -283,7 +292,7 @@ mod tests {
     const ENTRY: &str = "\
 # Daily 2026-08-17
 
-- Last day:
+- Friday:
   - [x] older thing
 
 - Today:
@@ -344,8 +353,8 @@ mod tests {
 
     #[test]
     fn stops_at_the_next_section() {
-        // `Last day` comes first, so its single task is all that belongs to it.
-        assert_eq!(tasks_in_section(ENTRY, "Last day"), vec![task(2, true, "older thing")]);
+        // The carried section comes first, so its single task is all that belongs to it.
+        assert_eq!(tasks_in_section(ENTRY, "Friday"), vec![task(2, true, "older thing")]);
     }
 
     #[test]
@@ -522,19 +531,29 @@ mod tests {
     }
 
     #[test]
-    fn a_journal_with_no_earlier_entry_carries_nothing() {
+    fn a_journal_with_no_earlier_entry_carries_nothing_and_names_the_day_before() {
         let journal = TempJournal::new("empty");
 
+        // Tuesday the 18th, with nothing to read: the heading still names Monday the 17th.
         let fields = last_day_fields(&journal.0, "md", "Today", date(2026, 8, 18));
 
         assert_eq!(
             fields,
             vec![
-                ("weekday".to_string(), NO_PREVIOUS_DAY.to_string()),
-                ("date".to_string(), String::new()),
+                ("weekday".to_string(), "Monday".to_string()),
+                ("date".to_string(), "2026-08-17".to_string()),
                 ("tasks".to_string(), EMPTY_LIST.to_string()),
                 ("todo".to_string(), EMPTY_LIST.to_string()),
             ]
         );
+    }
+
+    #[test]
+    fn the_day_before_a_monday_is_the_friday() {
+        // Monday the 3rd looks back on Friday the 31st, not on the weekend.
+        assert_eq!(previous_working_day(date(2026, 8, 3)), Some(date(2026, 7, 31)));
+        assert_eq!(previous_working_day(date(2026, 8, 4)), Some(date(2026, 8, 3)));
+        // A weekend entry looks back on the Friday too.
+        assert_eq!(previous_working_day(date(2026, 8, 9)), Some(date(2026, 8, 7)));
     }
 }
