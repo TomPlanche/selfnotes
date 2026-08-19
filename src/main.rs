@@ -7,7 +7,9 @@ mod config;
 mod date;
 mod entry;
 mod list;
+mod lsp;
 mod notes;
+mod people;
 mod search;
 mod template;
 
@@ -19,7 +21,7 @@ use clap::Parser;
 use dialoguer::theme::ColorfulTheme;
 use dialoguer::{Input, Select};
 
-use cli::{Cli, Command, ConfigAction, ConfigScope, TagSort};
+use cli::{Cli, Command, ConfigAction, ConfigScope, PeopleAction, TagSort};
 use config::{Config, FolderConfig};
 use entry::Entry;
 use notes::{Index, IndexedNote};
@@ -125,6 +127,8 @@ fn main() -> Result<()> {
 
             open_note(&config, &index, &name)?;
         },
+        Command::People { action } => run_people(action)?,
+        Command::Lsp => lsp::run()?,
         Command::Config { action } => run_config(action)?,
     }
 
@@ -401,6 +405,61 @@ fn prompt_fields(folder: &FolderConfig) -> Result<Vec<(String, String)>> {
     Ok(values)
 }
 
+/// Handle the `people` subcommand.
+fn run_people(action: Option<PeopleAction>) -> Result<()> {
+    let config = config::load()?;
+    let path = people::path(&config).context("could not determine where the people file lives")?;
+
+    match action {
+        Some(PeopleAction::Path) => println!("{}", path.display()),
+        Some(PeopleAction::Open) => {
+            if !path.exists() {
+                if let Some(parent) = path.parent() {
+                    std::fs::create_dir_all(parent)
+                        .with_context(|| format!("creating people directory {}", parent.display()))?;
+                }
+
+                std::fs::write(&path, people::TEMPLATE)
+                    .with_context(|| format!("writing people file {}", path.display()))?;
+                println!("Created {}", path.display());
+            }
+
+            return entry::open_paths_in_editor(&config, &[&path]);
+        },
+        None => print_people(&people::read(&path)?, &path),
+    }
+
+    Ok(())
+}
+
+/// Print the roster, flagging any handle that could never be typed after an `@`.
+fn print_people(directory: &people::Directory, path: &Path) {
+    if directory.people.is_empty() {
+        println!("No people in {}", path.display());
+        println!("Add some with `selfnotes people open`.");
+
+        return;
+    }
+
+    let width = directory
+        .people
+        .iter()
+        .map(|person| person.handle.chars().count())
+        .max()
+        .unwrap_or(0);
+
+    for person in &directory.people {
+        println!("@{:<width$}  {}", person.handle, person.detail());
+
+        if !person.has_usable_handle() {
+            println!(
+                "  warning: `{}` cannot be typed after an `@`, so it is never completed",
+                person.handle
+            );
+        }
+    }
+}
+
 /// Handle the `config` subcommand.
 fn run_config(action: ConfigAction) -> Result<()> {
     match action {
@@ -427,6 +486,10 @@ fn run_config(action: ConfigAction) -> Result<()> {
             println!("  format       = {}", merged.journal_format());
             println!("  editor       = {}", merged.editor.as_deref().unwrap_or("<unset>"));
             println!("  cursor-format = {}", merged.cursor_format());
+            println!(
+                "  people-file  = {}",
+                people::path(&merged).map_or_else(|| "<unavailable>".to_owned(), |path| path.display().to_string())
+            );
         },
         ConfigAction::Get { key } => {
             let config = config::load()?;
@@ -437,6 +500,7 @@ fn run_config(action: ConfigAction) -> Result<()> {
                 "editor" => config.editor,
                 "cursor-format" => Some(config.cursor_format().to_string()),
                 "hash-tag-min-len" => Some(config.hash_tag_min_len().to_string()),
+                "people-file" => people::path(&config).map(|path| path.display().to_string()),
                 other => bail!("unknown config key `{other}`"),
             };
 
@@ -453,6 +517,7 @@ fn run_config(action: ConfigAction) -> Result<()> {
                 "format" => config.format = Some(value),
                 "editor" => config.editor = Some(value),
                 "cursor-format" => config.cursor_format = Some(value),
+                "people-file" => config.people_file = Some(value),
                 "hash-tag-min-len" => {
                     config.hash_tag_min_len = Some(
                         value

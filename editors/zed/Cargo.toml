@@ -1,0 +1,15 @@
+[package]
+name = "zed-selfnotes"
+description = "Zed extension starting the selfnotes language server for `@mention` completion."
+edition = "2024"
+license = "Apache-2.0 OR MIT"
+publish = false
+version = "0.1.0"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+zed_extension_api = "0.7.0"
+
+[workspace]

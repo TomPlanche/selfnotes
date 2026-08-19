@@ -50,6 +50,10 @@ pub struct Config {
     /// Minimum length of an all-hexadecimal inline `#token` treated as a git hash rather than a tag. `Some(0)`
     /// disables the heuristic; unset uses [`DEFAULT_HASH_TAG_MIN_LEN`].
     pub hash_tag_min_len: Option<usize>,
+    /// Path to the roster of people completed after an `@` by `selfnotes lsp`. A leading `~` is expanded. Unset
+    /// resolves to a `people.toml` beside the global config; a path-scoped override can point at a different roster
+    /// per project.
+    pub people_file: Option<String>,
     /// Journal-specific settings.
     pub journal: Option<JournalConfig>,
     /// User-defined folders, selected by name from the command line.
@@ -174,6 +178,10 @@ impl Config {
 
         if other.hash_tag_min_len.is_some() {
             self.hash_tag_min_len = other.hash_tag_min_len;
+        }
+
+        if other.people_file.is_some() {
+            self.people_file = other.people_file;
         }
 
         if let Some(other_journal) = other.journal {

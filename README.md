@@ -66,6 +66,11 @@ selfnotes tags --folder ticket # only tags in the `ticket` folder
 selfnotes links login-bug # show a note's [[links]] and its backlinks
 selfnotes open login-bug  # resolve a [[wikilink]] target and open it
 
+selfnotes people               # list the people that `@mentions` complete to
+selfnotes people path          # show where the roster is read from
+selfnotes people open          # open the roster in your editor, creating it if needed
+selfnotes lsp                  # serve `@mention` completion over LSP (started by an editor)
+
 selfnotes config path                # show config locations and effective values
 selfnotes config validate            # check the effective config for problems
 selfnotes config open                # pick global or local interactively, then open it
@@ -75,6 +80,7 @@ selfnotes config set journal-root ~/notes
 selfnotes config set format md
 selfnotes config set editor "zed"
 selfnotes config set cursor-format "{path}:{line}:{column}"
+selfnotes config set people-file ~/work/people.toml
 selfnotes config set hash-tag-min-len 7   # tune the git-hash-vs-tag threshold
 ```
 
@@ -254,6 +260,89 @@ selfnotes open "Login bug investigation"   # by title
 
 And in prose, `[[login-bug]]`, `[[PROJ-1]]`, and `[[Login bug investigation]]` all link to it. When a name (filename, title, or alias) is shared by more than one note it is reported as ambiguous, and `links` / `open` list the candidates, showing each note's title where it has one, so you can qualify with `folder/name`.
 
+## Mentions
+
+Write a colleague into a note as `@handle`. Like tags and wikilinks it is plain text, so nothing has to know about it for the note to make sense later. What a roster adds is completion: list the people you work with once, and your editor offers them as soon as you type an `@`.
+
+### The roster
+
+People live in a `people.toml` next to the global config, at `~/.config/selfnotes/people.toml`. `selfnotes people open` creates it from a commented template and opens it.
+
+```toml
+[[people]]
+handle  = "jdoe"
+name    = "Jane Doe"
+email   = "jane.doe@example.com"
+team    = "backend"
+role    = "Tech lead"
+aliases = ["jane"]
+
+[[people]]
+handle = "cmartin"
+name   = "Chloé Martin"
+team   = "platform"
+```
+
+Only `handle` is required, and it is what you actually type after the `@`, so it cannot contain spaces. Everything else feeds the description shown beside a completion, and widens what finds the person: typing `@jane` matches an alias, `@doe` matches a word of the name, and `@jane.` matches the local part of the email address. Handles match first, then aliases, then names, then emails.
+
+`selfnotes people` lists the roster and flags any handle that could never be typed after an `@`.
+
+```
+$ selfnotes people
+@jdoe      Jane Doe (Tech lead, backend)
+@cmartin   Chloé Martin (platform)
+```
+
+Point `people_file` at a different path to use another roster, which pairs with [path-scoped overrides](#path-scoped-overrides): work notes get the company roster, everything else gets your own.
+
+```toml
+[[overrides]]
+path = "/Affluences/**"
+config = "/Affluences/afl-notes/selfnotes.config"
+```
+
+```toml
+# /Affluences/afl-notes/selfnotes.config
+people_file = "/Affluences/afl-notes/people.toml"
+```
+
+### Editor completion
+
+`selfnotes lsp` serves the roster over the Language Server Protocol on stdin and stdout. An editor starts it; you never run it by hand. It offers two things in Markdown buffers:
+
+- Completion after an `@`, showing each person's name, role and team, and inserting `@handle`.
+- Hover over a written `@handle`, showing who it is.
+
+The `@` in an email address is left alone, so `jane@example.com` never opens a completion popup. The roster is re-read whenever the file changes, so adding a colleague takes effect on the next keystroke rather than the next restart. Which roster applies is resolved from the workspace the editor opened, so the override above works inside the editor too.
+
+#### Zed
+
+The extension in `editors/zed` starts the language server for Markdown files. It carries no binary of its own: it runs the `selfnotes` already on your machine.
+
+1. Install `selfnotes` so it is on your `$PATH` (`cargo install --path .` from this repository).
+2. In Zed, open the command palette and run `zed: extensions`.
+3. Click `Install Dev Extension` and pick the `editors/zed` directory.
+
+Zed builds the extension to WebAssembly on install, which needs the `wasm32-wasip2` target (`rustup target add wasm32-wasip2`).
+
+If Zed cannot find the binary, a GUI launch inherits a shorter `$PATH` than your terminal does. Point it at the binary directly in your Zed settings:
+
+```json
+{
+  "lsp": {
+    "selfnotes": {
+      "binary": { "path": "/Users/you/.cargo/bin/selfnotes" }
+    }
+  }
+}
+```
+
+The server logs how many people it loaded and from where when it starts, which the `debug: open language server logs` action shows.
+
+#### Other editors
+
+Any LSP client works. Run `selfnotes lsp` as the server command for Markdown, with no arguments beyond `lsp`, and give it your notes directory as the workspace root.
+
 ## Configuration
 
 Configuration is merged from up to three layers, each overriding the previous:
@@ -262,7 +351,7 @@ Configuration is merged from up to three layers, each overriding the previous:
 - Overrides: path-scoped config files declared in the global config (see below).
 - Local: the nearest `.selfnotes.toml` found by walking up from the current directory.
 
-Scalar keys (`journal_root`, `format`, `editor`, `cursor_format`, `hash_tag_min_len`) and the `[journal]` section are merged field by field. `default_tags` (top level and per source) is replaced by a later layer that sets a non-empty list. Each `[[custom_folders]]` entry is matched by `name`: a later entry with the same name replaces the earlier one, and any new names are appended.
+Scalar keys (`journal_root`, `format`, `editor`, `cursor_format`, `hash_tag_min_len`, `people_file`) and the `[journal]` section are merged field by field. `default_tags` (top level and per source) is replaced by a later layer that sets a non-empty list. Each `[[custom_folders]]` entry is matched by `name`: a later entry with the same name replaces the earlier one, and any new names are appended.
 
 ### Path-scoped overrides
 
@@ -290,6 +379,8 @@ editor = "nvim"
 default_tags = ["me"]
 # All-hex inline #tokens this long or longer are treated as git hashes, not tags (default 6; 0 disables).
 hash_tag_min_len = 6
+# Roster of people completed after an `@` (defaults to people.toml beside this file).
+people_file = "~/.config/selfnotes/people.toml"
 
 [journal]
 # Optional template rendered into new journal entries.

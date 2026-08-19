@@ -8,7 +8,7 @@ keywords = ["cli", "notes", "helper"]
 license = "Apache-2.0 OR MIT"
 name = "selfnotes"
 readme = "README.md"
-version = "0.15.0"
+version = "0.16.0"
 
 [lints.clippy]
 correctness = { level = "warn", priority = -1 }
@@ -27,4 +27,5 @@ dialoguer = "0.12.0"
 dirs = "6.0.0"
 glob = "0.3.3"
 serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.151"
 toml = "1.1.2"

@@ -96,11 +96,28 @@ pub enum Command {
         /// Note to open, by name (optionally `folder/name`).
         name: String,
     },
+    /// List the people that `@mentions` complete to.
+    People {
+        #[command(subcommand)]
+        action: Option<PeopleAction>,
+    },
+    /// Serve `@mention` completion over the Language Server Protocol, on stdin and stdout.
+    ///
+    /// Started by an editor extension rather than run by hand.
+    Lsp,
     /// Inspect or change configuration.
     Config {
         #[command(subcommand)]
         action: ConfigAction,
     },
+}
+
+#[derive(Debug, Clone, Copy, Subcommand)]
+pub enum PeopleAction {
+    /// Show where the roster is read from.
+    Path,
+    /// Open the roster in your editor, creating it from a template if needed.
+    Open,
 }
 
 /// Sort order for the `tags` listing.
@@ -134,12 +151,12 @@ pub enum ConfigAction {
     },
     /// Print a single configuration value.
     Get {
-        /// One of: journal-root, format, editor, cursor-format, hash-tag-min-len.
+        /// One of: journal-root, format, editor, cursor-format, hash-tag-min-len, people-file.
         key: String,
     },
     /// Set a value in the global configuration.
     Set {
-        /// One of: journal-root, format, editor, cursor-format, hash-tag-min-len.
+        /// One of: journal-root, format, editor, cursor-format, hash-tag-min-len, people-file.
         key: String,
         /// The value to store.
         value: String,
