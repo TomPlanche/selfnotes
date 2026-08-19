@@ -437,9 +437,19 @@ path = "/Affluences/**"
 config = "/Affluences/afl-notes/selfnotes.config"
 ```
 
-A leading `~` is expanded in both `path` and `config`, and `**` matches across directory separators. A trailing `/**` also matches the base directory itself, so `/Affluences/**` covers `/Affluences` as well as everything under it. Overrides are applied in declaration order, and a referenced file that does not exist is skipped.
+`path` also takes a list, spelled `paths` when that reads better, for one config file covering trees that share no common root:
 
-Reach for one only when the config cannot sit at the root of what it configures. A `.selfnotes.toml` at that root already covers the whole tree, without a second file, without absolute paths, and without going stale when the directory is renamed or moved. The override earns its indirection when the config has to live somewhere else, or in a tree you would rather not write into at all.
+```toml
+[[overrides]]
+paths = ["~/Affluences/**", "~/clients/acme/**"]
+config = "~/Affluences/afl-notes/selfnotes.config"
+```
+
+Any one of the globs selects the directory. `path` and `paths` are the same key, and either spelling accepts either shape.
+
+A leading `~` is expanded in every glob and in `config`, and `**` matches across directory separators. A trailing `/**` also matches the base directory itself, so `/Affluences/**` covers `/Affluences` as well as everything under it. Overrides are applied in declaration order, and a referenced file that does not exist is skipped.
+
+Reach for one only when the config cannot sit at the root of what it configures. A `.selfnotes.toml` at that root already covers the whole tree, without a second file, without absolute paths, and without going stale when the directory is renamed or moved. The override earns its indirection when the config has to live somewhere else, when you would rather not write into the tree at all, or when one config has to cover several trees that share no root.
 
 ### Example
 
@@ -488,7 +498,7 @@ Running `selfnotes new` with no folder shows a picker of the configured folder n
 
 Each file is judged on what actually takes effect: a folder or journal template shadowed by a higher-priority layer is not re-checked, and folder directories are resolved against the effective journal root even when a given file does not set its own root. The set of files checked mirrors what loading merges: the global config, each matching override's referenced config, and the nearest local `.selfnotes.toml`.
 
-The command also inspects the `[[overrides]]` declared in each config file. An invalid glob is an error. For an override in the global config, it reports whether the glob matches the current directory and checks the referenced config file exists (an error when the override matches here, a warning otherwise); the referenced config's own folders and templates are validated as one of the checked files. An override declared in a local config is reported as ignored, since only the global config's overrides are applied, along with whether its glob would even have matched, which is the usual reason such an override looks like it does nothing.
+The command also inspects the `[[overrides]]` declared in each config file. An invalid glob is an error, and every glob of an entry is checked even once one of them has matched, so a typo cannot hide behind a sibling that works. An entry declaring no glob at all is reported as a warning, since it never applies. For an override in the global config, it reports whether the glob matches the current directory and checks the referenced config file exists (an error when the override matches here, a warning otherwise); the referenced config's own folders and templates are validated as one of the checked files. An override declared in a local config is reported as ignored, since only the global config's overrides are applied, along with whether its glob would even have matched, which is the usual reason such an override looks like it does nothing.
 
 Entry names are held to the same rule at creation time: a `name` containing a path separator, `..`, or an absolute path is rejected before anything is written, so an entry can never be created outside the journal root.
 

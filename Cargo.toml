@@ -8,7 +8,7 @@ keywords = ["cli", "notes", "helper"]
 license = "Apache-2.0 OR MIT"
 name = "selfnotes"
 readme = "README.md"
-version = "0.19.0"
+version = "0.20.0"
 
 [lints.clippy]
 correctness = { level = "warn", priority = -1 }

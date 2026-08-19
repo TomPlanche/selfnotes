@@ -940,6 +940,18 @@ fn check_folder(folder: &FolderConfig, root: Option<&Path>, source: &str, proble
 /// glob, report whether it matches `cwd`, and check the referenced config file exists. The referenced config's own
 /// contents are validated separately as a participating layer.
 fn check_override(over: &config::Override, is_local: bool, source: &str, cwd: &Path, problems: &mut Problems) {
+    if over.path.as_slice().is_empty() {
+        problems.warn(
+            source,
+            format!(
+                "override -> {} declares no glob, so it never applies",
+                config::expand_tilde(&over.config).display()
+            ),
+        );
+
+        return;
+    }
+
     let matches = config::override_matches(over, cwd);
 
     if is_local {
@@ -954,7 +966,7 @@ fn check_override(over: &config::Override, is_local: bool, source: &str, cwd: &P
         problems.warn(
             source,
             format!(
-                "override for `{}` is ignored (overrides are only applied from the global config); {note}",
+                "override for {} is ignored (overrides are only applied from the global config); {note}",
                 over.path
             ),
         );
@@ -974,7 +986,7 @@ fn check_override(over: &config::Override, is_local: bool, source: &str, cwd: &P
     let referenced = config::expand_tilde(&over.config);
     if !referenced.exists() {
         let message = format!(
-            "override for `{}` -> config file not found: {}",
+            "override for {} -> config file not found: {}",
             over.path,
             referenced.display()
         );

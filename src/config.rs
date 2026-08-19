@@ -8,6 +8,7 @@
 //! `selfnotes config new` writes the local layer: a [`LOCAL_CONFIG_NAME`] file in the current directory, seeded with
 //! [`LOCAL_CONFIG_TEMPLATE`].
 
+use std::fmt;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -117,12 +118,72 @@ pub struct Config {
 #[derive(Debug, Default, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Override {
-    /// Glob pattern matched against the current working directory. A leading `~` is expanded, and `**` matches across
-    /// directory separators.
-    pub path: String,
+    /// Glob (or globs) matched against the current working directory. A leading `~` is expanded, and `**` matches
+    /// across directory separators. Also spelled `paths`, which reads better for a list.
+    #[serde(alias = "paths")]
+    pub path: Globs,
     /// Path to the config file layered on top of the global config when the pattern matches. A leading `~` is
     /// expanded.
     pub config: String,
+}
+
+/// The glob, or globs, an override matches the working directory against.
+///
+/// A bare string covers the common case of one tree. An array covers one config file shared by several disjoint
+/// trees, which is otherwise only expressible by repeating the whole entry.
+///
+/// ```toml
+/// [[overrides]]
+/// path = "~/work/**"
+///
+/// [[overrides]]
+/// paths = ["~/work/**", "~/clients/acme/**"]
+/// ```
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum Globs {
+    /// A single glob.
+    One(String),
+    /// Several globs, any one of which selects a directory.
+    Many(Vec<String>),
+}
+
+impl Default for Globs {
+    /// No globs, which selects nothing.
+    fn default() -> Self {
+        Self::Many(Vec::new())
+    }
+}
+
+impl From<&str> for Globs {
+    fn from(glob: &str) -> Self {
+        Self::One(glob.to_owned())
+    }
+}
+
+impl Globs {
+    /// The globs, as a slice.
+    pub fn as_slice(&self) -> &[String] {
+        match self {
+            Self::One(glob) => std::slice::from_ref(glob),
+            Self::Many(globs) => globs,
+        }
+    }
+}
+
+impl fmt::Display for Globs {
+    /// The globs as a backticked, comma-separated list, ready to drop into a message.
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for (index, glob) in self.as_slice().iter().enumerate() {
+            if index > 0 {
+                write!(formatter, ", ")?;
+            }
+
+            write!(formatter, "`{glob}`")?;
+        }
+
+        Ok(())
+    }
 }
 
 /// Settings for the built-in journal.
@@ -404,7 +465,7 @@ fn matching_override_paths(overrides: &[Override], cwd: &Path) -> Result<Vec<Pat
     let mut paths = Vec::new();
 
     for entry in overrides {
-        if glob_selects_dir(&entry.path, cwd)? {
+        if override_matches(entry, cwd)? {
             paths.push(expand_tilde(&entry.config));
         }
     }
@@ -459,11 +520,19 @@ pub fn find_local_config(start: &Path) -> Option<PathBuf> {
     None
 }
 
-/// Whether an override's glob matches `dir`. Errors when the glob is invalid.
+/// Whether any of an override's globs matches `dir`. Errors when one of them is invalid.
 ///
-/// See [`glob_selects_dir`] for what a glob matches.
+/// See [`glob_selects_dir`] for what a single glob matches.
 pub fn override_matches(entry: &Override, dir: &Path) -> Result<bool> {
-    glob_selects_dir(&entry.path, dir)
+    let mut matched = false;
+
+    // Every glob is compiled even once one has matched, so `config validate` reports a typo in a later glob rather
+    // than letting an earlier match hide it.
+    for glob in entry.path.as_slice() {
+        matched |= glob_selects_dir(glob, dir)?;
+    }
+
+    Ok(matched)
 }
 
 /// Read and parse a config file, returning `None` if it does not exist.
@@ -617,7 +686,98 @@ mod tests {
         config.overlay(global);
 
         assert_eq!(config.overrides.len(), 1);
-        assert_eq!(config.overrides[0].path, "/Affluences/**");
+        assert_eq!(config.overrides[0].path.as_slice(), ["/Affluences/**"]);
+    }
+
+    #[test]
+    fn an_override_takes_one_glob_or_several() {
+        let config: Config = toml::from_str(
+            r#"
+            [[overrides]]
+            path = "~/work/**"
+            config = "~/work/selfnotes.config"
+
+            [[overrides]]
+            paths = ["~/work/**", "~/clients/acme/**"]
+            config = "~/work/selfnotes.config"
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(config.overrides[0].path.as_slice(), ["~/work/**"]);
+        // `paths` is the same key, spelled for a list.
+        assert_eq!(config.overrides[1].path.as_slice(), ["~/work/**", "~/clients/acme/**"]);
+    }
+
+    #[test]
+    fn any_of_an_overrides_globs_selects_the_directory() {
+        // The point of a list: one config file covering trees that share no common root.
+        let entry = Override {
+            path: Globs::Many(vec!["/work/**".into(), "/clients/acme/**".into()]),
+            config: "/work/selfnotes.config".into(),
+        };
+
+        assert!(override_matches(&entry, Path::new("/work/notes")).unwrap());
+        assert!(override_matches(&entry, Path::new("/clients/acme")).unwrap());
+        assert!(!override_matches(&entry, Path::new("/clients/other")).unwrap());
+    }
+
+    #[test]
+    fn an_invalid_glob_is_reported_even_after_one_has_matched() {
+        // Regression: short-circuiting on the first match would let `config validate` pass over a typo behind it.
+        let entry = Override {
+            path: Globs::Many(vec!["/work/**".into(), "/a/b**".into()]),
+            config: "/work/selfnotes.config".into(),
+        };
+
+        let error = override_matches(&entry, Path::new("/work/notes"))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("/a/b**"), "{error}");
+    }
+
+    #[test]
+    fn an_override_without_a_glob_selects_nothing() {
+        let entry = Override {
+            path: Globs::Many(Vec::new()),
+            config: "/work/selfnotes.config".into(),
+        };
+
+        assert!(!override_matches(&entry, Path::new("/work")).unwrap());
+    }
+
+    #[test]
+    fn a_globs_list_survives_a_round_trip_through_toml() {
+        // `config set` rewrites the whole global config, so a list must not come back as something else.
+        let before = Config {
+            overrides: vec![
+                Override {
+                    path: "~/work/**".into(),
+                    config: "~/work/selfnotes.config".into(),
+                },
+                Override {
+                    path: Globs::Many(vec!["~/work/**".into(), "~/clients/acme/**".into()]),
+                    config: "~/work/selfnotes.config".into(),
+                },
+            ],
+            ..Config::default()
+        };
+
+        let after: Config = toml::from_str(&toml::to_string_pretty(&before).unwrap()).unwrap();
+
+        assert_eq!(after.overrides[0].path.as_slice(), ["~/work/**"]);
+        assert!(matches!(after.overrides[0].path, Globs::One(_)));
+        assert_eq!(after.overrides[1].path.as_slice(), ["~/work/**", "~/clients/acme/**"]);
+        assert!(matches!(after.overrides[1].path, Globs::Many(_)));
+    }
+
+    #[test]
+    fn globs_render_as_a_backticked_list() {
+        assert_eq!(Globs::from("~/work/**").to_string(), "`~/work/**`");
+        assert_eq!(
+            Globs::Many(vec!["~/work/**".into(), "~/clients/acme/**".into()]).to_string(),
+            "`~/work/**`, `~/clients/acme/**`"
+        );
     }
 
     #[test]
