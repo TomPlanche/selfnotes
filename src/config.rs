@@ -67,7 +67,12 @@ pub struct Config {
 }
 
 /// A path-scoped override that points at an extra config file.
+///
+/// Unknown keys are rejected rather than ignored: an override's vocabulary is closed, so a setting written here is
+/// almost always one that belongs at the top level of the config it points at, and silently dropping it would leave
+/// the setting looking applied when it never was.
 #[derive(Debug, Default, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct Override {
     /// Glob pattern matched against the current working directory. A leading `~` is expanded, and `**` matches across
     /// directory separators.
@@ -561,6 +566,24 @@ mod tests {
 
         assert_eq!(config.overrides.len(), 1);
         assert_eq!(config.overrides[0].path, "/Affluences/**");
+    }
+
+    #[test]
+    fn a_setting_misplaced_inside_an_override_is_an_error() {
+        // Regression: `people_file` belongs at the top level. Accepting and ignoring it here made a roster look
+        // configured while the default one was still being read.
+        let error = toml::from_str::<Config>(
+            r#"
+            [[overrides]]
+            path = "~/work/**"
+            config = "~/work/selfnotes.config"
+            people_file = "~/work/people.toml"
+            "#,
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(error.contains("people_file"), "{error}");
     }
 
     #[test]

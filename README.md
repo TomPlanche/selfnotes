@@ -293,18 +293,29 @@ $ selfnotes people
 @cmartin   Chloé Martin (platform)
 ```
 
-Point `people_file` at a different path to use another roster, which pairs with [path-scoped overrides](#path-scoped-overrides): work notes get the company roster, everything else gets your own.
+`people_file` points at a different roster, so work notes can use the company one while everything else uses your own. It is a top-level key, like `journal_root` or `editor`, and it belongs in whichever [config layer](#configuration) covers those notes. Usually that is a local `.selfnotes.toml` at the root of the work tree:
 
 ```toml
+# ~/work/.selfnotes.toml
+journal_root = "~/work/journal"
+people_file = "~/work/people.toml"
+```
+
+It can also come from a [path-scoped override](#path-scoped-overrides), which is worth the extra indirection only when the work tree has no `.selfnotes.toml` of its own. That takes two files, and the `[[overrides]]` entry has to live in the **global** config, since overrides declared in a local config are ignored:
+
+```toml
+# ~/.config/selfnotes/config.toml
 [[overrides]]
-path = "/Affluences/**"
-config = "/Affluences/afl-notes/selfnotes.config"
+path = "~/work/**"
+config = "~/work/selfnotes.config"
 ```
 
 ```toml
-# /Affluences/afl-notes/selfnotes.config
-people_file = "/Affluences/afl-notes/people.toml"
+# ~/work/selfnotes.config, the file the entry above points at
+people_file = "~/work/people.toml"
 ```
+
+`people_file` goes at the top level of that referenced config, never inside the `[[overrides]]` entry itself. An override entry only understands `path` and `config`, and anything else in it is reported as an error rather than quietly ignored.
 
 ### Editor completion
 
