@@ -77,8 +77,7 @@ selfnotes lsp                  # serve `@mention` completion over LSP (started b
 
 selfnotes config path                # show config locations and effective values
 selfnotes config validate            # check the effective config for problems
-selfnotes config new                 # create a config here, scoped to this directory and everything under it
-selfnotes config new --path '~/Affluences/**'  # scope it to another tree instead
+selfnotes config new                 # create a .selfnotes.toml here, covering this directory and below
 selfnotes config open                # pick global or local interactively, then open it
 selfnotes config open <local|global> # open the local config directly (or `global`)
 selfnotes config get journal-root
@@ -359,7 +358,7 @@ journal_root = "~/work/journal"
 people_file = "~/work/people.toml"
 ```
 
-It can also come from a [path-scoped override](#path-scoped-overrides), which is worth the extra indirection only when the work tree has no `.selfnotes.toml` of its own. That takes two files, and the `[[overrides]]` entry has to live in the **global** config, since overrides declared in a local config are ignored (`selfnotes config new` writes both for you):
+It can also come from a [path-scoped override](#path-scoped-overrides), which is worth the extra indirection only when the work tree has no `.selfnotes.toml` of its own. That takes two files, and the `[[overrides]]` entry has to live in the **global** config, since overrides declared in a local config are ignored:
 
 ```toml
 # ~/.config/selfnotes/config.toml
@@ -425,6 +424,8 @@ Configuration is merged from up to three layers, each overriding the previous:
 
 Scalar keys (`journal_root`, `format`, `editor`, `cursor_format`, `hash_tag_min_len`, `people_file`) and the `[journal]` section are merged field by field. `default_tags` (top level and per source) is replaced by a later layer that sets a non-empty list. Each `[[custom_folders]]` entry is matched by `name`: a later entry with the same name replaces the earlier one, and any new names are appended.
 
+`selfnotes config new` writes the local layer for you: a `.selfnotes.toml` in the current directory, holding a commented starting point rather than an empty file. Nothing has to be registered anywhere, since a run finds it by walking up. Dropping it at the root of a tree therefore configures that whole tree, and only the nearest one applies: a copy in a subdirectory replaces its ancestor rather than adding to it. An existing file is never overwritten, so re-running the command changes nothing.
+
 ### Path-scoped overrides
 
 The global config can declare `[[overrides]]` entries, each pairing a glob `path` with a `config` file. When the current working directory matches the glob, that config is layered on top of the global config (but below any local `.selfnotes.toml`). This lets a whole directory tree pick up its own defaults without a `.selfnotes.toml` in each project.
@@ -438,34 +439,7 @@ config = "/Affluences/afl-notes/selfnotes.config"
 
 A leading `~` is expanded in both `path` and `config`, and `**` matches across directory separators. A trailing `/**` also matches the base directory itself, so `/Affluences/**` covers `/Affluences` as well as everything under it. Overrides are applied in declaration order, and a referenced file that does not exist is skipped.
 
-#### Creating one
-
-`selfnotes config new` writes both halves at once. Run it in the directory the config is for:
-
-```
-cd ~/Affluences/afl-notes
-selfnotes config new
-```
-
-That creates `selfnotes.config` in the current directory (with a commented starting point inside) and appends the matching `[[overrides]]` entry to the global config, since an override declared anywhere else is ignored. The glob defaults to the current directory and everything under it:
-
-```toml
-# ~/.config/selfnotes/config.toml, appended
-[[overrides]]
-path = "/Users/you/Affluences/afl-notes/**"
-config = "/Users/you/Affluences/afl-notes/selfnotes.config"
-```
-
-`--path` (`-p`) scopes it somewhere else, which is what you want when the config file lives inside the tree it configures rather than at its root:
-
-```
-cd ~/Affluences/afl-notes
-selfnotes config new --path '~/Affluences/**'
-```
-
-The global config is edited as text rather than rewritten from a parsed config, so its comments, key order and formatting survive. Re-running the command changes nothing it has already done: an existing `selfnotes.config` is left as written, and an override already pointing at it is reported instead of duplicated. To repoint an existing entry at a different glob, edit it in the global config.
-
-The file name is `selfnotes.config` rather than `.selfnotes.toml` on purpose: the local layer picks the latter up on its own, and a file arriving through both layers would make the override look like it does nothing.
+Reach for one only when the config cannot sit at the root of what it configures. A `.selfnotes.toml` at that root already covers the whole tree, without a second file, without absolute paths, and without going stale when the directory is renamed or moved. The override earns its indirection when the config has to live somewhere else, or in a tree you would rather not write into at all.
 
 ### Example
 

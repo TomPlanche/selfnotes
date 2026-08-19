@@ -170,16 +170,10 @@ pub enum ConfigAction {
     Path,
     /// Check the effective configuration for problems (bad paths, missing templates, ...).
     Validate,
-    /// Create a config file here and register it as a path-scoped override in the global config.
+    /// Create a `.selfnotes.toml` in the current directory, covering it and everything under it.
     ///
-    /// Writes `selfnotes.config` in the current directory and adds the `[[overrides]]` entry pointing at it, since
-    /// only the global config's overrides are applied. Re-running is safe: neither file is overwritten.
-    New {
-        /// Glob the override matches against the working directory. Defaults to the current directory and everything
-        /// under it.
-        #[arg(short, long, value_name = "GLOB")]
-        path: Option<String>,
-    },
+    /// The file is seeded with a commented starting point. An existing one is never overwritten.
+    New,
     /// Open a config file in your editor, creating it if needed.
     Open {
         /// Which config to open: `global` or `local`. Prompted for if omitted.
