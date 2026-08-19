@@ -6,6 +6,7 @@ mod cli;
 mod config;
 mod date;
 mod entry;
+mod import;
 mod list;
 mod lsp;
 mod notes;
@@ -21,7 +22,7 @@ use clap::Parser;
 use dialoguer::theme::ColorfulTheme;
 use dialoguer::{Input, Select};
 
-use cli::{Cli, Command, ConfigAction, ConfigScope, PeopleAction, TagSort};
+use cli::{Cli, Command, ConfigAction, ConfigScope, ImportFormat, PeopleAction, TagSort};
 use config::{Config, FolderConfig};
 use entry::Entry;
 use notes::{Index, IndexedNote};
@@ -426,10 +427,122 @@ fn run_people(action: Option<PeopleAction>) -> Result<()> {
 
             return entry::open_paths_in_editor(&config, &[&path]);
         },
+        Some(PeopleAction::Import { format, prune, dry_run }) => return import_people(&path, format, prune, dry_run),
         None => print_people(&people::read(&path)?, &path),
     }
 
     Ok(())
+}
+
+/// Handle `people import`: fold a directory export arriving on standard input into the roster.
+fn import_people(path: &Path, format: ImportFormat, prune: bool, dry_run: bool) -> Result<()> {
+    let format = match format {
+        ImportFormat::Json => import::Format::Json,
+        ImportFormat::Tsv => import::Format::Tsv,
+        ImportFormat::Csv => import::Format::Csv,
+    };
+
+    let input = std::io::read_to_string(std::io::stdin()).context("reading standard input")?;
+    if input.trim().is_empty() {
+        bail!("nothing on standard input; pipe a directory export into `selfnotes people import`");
+    }
+
+    let (records, skipped) = import::parse(&input, format)?;
+    // The file is read as text, not through `people::read`, because the merge edits that text in place.
+    let text = if path.exists() {
+        std::fs::read_to_string(path).with_context(|| format!("reading people file {}", path.display()))?
+    } else {
+        String::new()
+    };
+    let directory = toml::from_str(&text).with_context(|| format!("parsing people file {}", path.display()))?;
+
+    let plan = import::plan(&directory, &records, skipped);
+    report_import(&plan, prune);
+
+    if plan.is_empty(prune) {
+        println!(
+            "
+Nothing to do; {} is unchanged.",
+            path.display()
+        );
+
+        return Ok(());
+    }
+
+    // Build the new text even for a dry run: it is what proves the edit is sound before anyone relies on the report.
+    let updated = import::apply(&text, &plan, prune)?;
+
+    if dry_run {
+        println!(
+            "
+Dry run; {} was not written.",
+            path.display()
+        );
+
+        return Ok(());
+    }
+
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).with_context(|| format!("creating people directory {}", parent.display()))?;
+    }
+
+    std::fs::write(path, updated).with_context(|| format!("writing people file {}", path.display()))?;
+    println!(
+        "
+Updated {}",
+        path.display()
+    );
+
+    Ok(())
+}
+
+/// Print what an import found, before anything is written.
+fn report_import(plan: &import::Plan, prune: bool) {
+    let read = plan.added.len() + plan.present.len();
+    match plan.skipped {
+        0 => println!("{read} people read from standard input."),
+        skipped => println!("{read} people read from standard input, {skipped} skipped (no handle, or not active)."),
+    }
+
+    if !plan.added.is_empty() {
+        println!(
+            "  + {} added: {}",
+            plan.added.len(),
+            handle_list(plan.added.iter().map(|record| &record.handle))
+        );
+    }
+
+    if !plan.present.is_empty() {
+        println!("    {} already in the roster, left untouched", plan.present.len());
+    }
+
+    if !plan.missing.is_empty() {
+        let verb = if prune { "removed" } else { "not in the source" };
+
+        println!(
+            "  - {} {verb}: {}",
+            plan.missing.len(),
+            handle_list(plan.missing.iter())
+        );
+
+        if !prune {
+            println!("    (remove them with --prune)");
+        }
+    }
+}
+
+/// Render handles as a comma-separated `@name` list, abbreviated once it gets long.
+fn handle_list<'a>(handles: impl ExactSizeIterator<Item = &'a String>) -> String {
+    const SHOWN: usize = 8;
+
+    let total = handles.len();
+    let mut names: Vec<String> = handles.take(SHOWN).map(|handle| format!("@{handle}")).collect();
+
+    if total > SHOWN {
+        names.push(format!("and {} more", total - SHOWN));
+    }
+
+    names.join(", ")
 }
 
 /// Print the roster, flagging any handle that could never be typed after an `@`.

@@ -69,6 +69,10 @@ selfnotes open login-bug  # resolve a [[wikilink]] target and open it
 selfnotes people               # list the people that `@mentions` complete to
 selfnotes people path          # show where the roster is read from
 selfnotes people open          # open the roster in your editor, creating it if needed
+selfnotes people import        # add people from a directory export on stdin (JSON by default)
+selfnotes people import --format tsv    # tab-separated rows instead
+selfnotes people import --dry-run       # report what would change, write nothing
+selfnotes people import --prune         # also drop people the source no longer lists
 selfnotes lsp                  # serve `@mention` completion over LSP (started by an editor)
 
 selfnotes config path                # show config locations and effective values
@@ -292,6 +296,46 @@ $ selfnotes people
 @jdoe      Jane Doe (Tech lead, backend)
 @cmartin   Chloé Martin (platform)
 ```
+
+#### Filling it from a directory
+
+Something already knows who works with you. `selfnotes people import` reads whatever that thing prints on standard input and folds it into the roster. Fetching and authentication stay outside: `selfnotes` reads a stream, it never calls an API.
+
+```
+glab api --paginate "groups/affluences/members/all" | selfnotes people import
+```
+
+```
+7 people read from standard input, 1 skipped (no handle, or not active).
+  + 1 added: @nouvelle.recrue
+    6 already in the roster, left untouched
+
+Updated /Users/you/Affluences/people.toml
+```
+
+The merge only ever adds. An entry already in the roster is left exactly as written, because `team`, `role` and `aliases` are things no export knows about and re-importing must not undo them. Comments, key alignment and entry order all survive, because the file's text is edited rather than regenerated. The result is parsed again before it is written, and anything unexpected aborts instead of overwriting.
+
+People the source no longer lists are reported, and removed only with `--prune`. `--dry-run` prints the same report and writes nothing.
+
+`--format` accepts `json` (the default), `tsv` and `csv`. JSON may be one array, several arrays back to back, or one object per line, which covers paginated fetches whether or not they merge the pages. Handles are read from `handle`, `username`, `login` or `nickname`, names from `name`, `full_name`, `real_name` or `display_name`, and `email`, `team` and `role` likewise, so GitLab, GitHub and Slack exports all land without reshaping. A record whose `state` is anything but `active` is skipped, which keeps blocked accounts out of your completions.
+
+Delimited input uses a header row to name the columns when it has one, and otherwise reads the first two columns as handle then name:
+
+```
+glab api --paginate "groups/affluences/members/all" \
+  | jq -r '.[] | "\(.username)\t\(.name)"' \
+  | selfnotes people import --format tsv
+```
+
+Without `glab`, any authenticated fetch works the same way. A personal access token with the `read_api` scope is enough:
+
+```
+curl -sS --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
+  "https://gitlab.example.com/api/v4/groups/affluences/members/all?per_page=100" \
+  | selfnotes people import
+```
+
+That one call stops at the first page. For a group larger than `per_page` the pages have to be walked through the `x-next-page` response header, which is what a wrapper script is for.
 
 `people_file` points at a different roster, so work notes can use the company one while everything else uses your own. It is a top-level key, like `journal_root` or `editor`, and it belongs in whichever [config layer](#configuration) covers those notes. Usually that is a local `.selfnotes.toml` at the root of the work tree:
 

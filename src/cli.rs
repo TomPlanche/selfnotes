@@ -118,6 +118,32 @@ pub enum PeopleAction {
     Path,
     /// Open the roster in your editor, creating it from a template if needed.
     Open,
+    /// Add people to the roster from a directory export on standard input.
+    ///
+    /// Only ever adds: an entry already in the roster is left as written, so the fields you filled in by hand survive
+    /// re-importing. Comments and formatting are preserved.
+    Import {
+        /// Shape of the data on standard input.
+        #[arg(short, long, value_enum, default_value_t = ImportFormat::Json)]
+        format: ImportFormat,
+        /// Also remove people the source does not list.
+        #[arg(long)]
+        prune: bool,
+        /// Report what would change without writing anything.
+        #[arg(long)]
+        dry_run: bool,
+    },
+}
+
+/// Shape of the data `people import` reads from standard input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum ImportFormat {
+    /// JSON objects, as an array, several arrays back to back, or one per line.
+    Json,
+    /// Tab-separated rows, with or without a header row.
+    Tsv,
+    /// Comma-separated rows, with or without a header row.
+    Csv,
 }
 
 /// Sort order for the `tags` listing.
