@@ -34,6 +34,33 @@ pub const TEMPLATE: &str = "\
 # aliases = [\"jane\"]
 ";
 
+/// A named link attached to a person: their chat thread, their profile page, whatever you want one keystroke away.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct Link {
+    /// Label shown in the hover popup. Defaults to the URL's host.
+    pub name: Option<String>,
+    pub url: String,
+}
+
+impl Link {
+    /// What to call this link on screen: its name, else the host it points at, else the whole URL.
+    pub fn label(&self) -> &str {
+        if let Some(name) = self.name.as_deref() {
+            return name;
+        }
+
+        host(&self.url).unwrap_or(&self.url)
+    }
+}
+
+/// The host part of a URL, without pulling in a URL parser for what is only ever a label.
+fn host(url: &str) -> Option<&str> {
+    let after_scheme = url.split_once("://")?.1;
+    let host = after_scheme.split(['/', '?', '#']).next()?;
+
+    (!host.is_empty()).then_some(host)
+}
+
 /// One person in the roster.
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct Person {
@@ -47,6 +74,10 @@ pub struct Person {
     /// Extra handles that resolve to this person, and that completion matches on too.
     #[serde(default)]
     pub aliases: Vec<String>,
+    /// Links to this person elsewhere, in the order you wrote them. All of them show up on hover; the first is the
+    /// one an editor opens on a modifier-click over the mention.
+    #[serde(default)]
+    pub links: Vec<Link>,
 }
 
 impl Person {
@@ -92,6 +123,16 @@ impl Person {
         if !self.aliases.is_empty() {
             let aliases: Vec<String> = self.aliases.iter().map(|alias| format!("`@{alias}`")).collect();
             lines.push(format!("Also: {}", aliases.join(", ")));
+        }
+
+        if !self.links.is_empty() {
+            let bullets: Vec<String> = self
+                .links
+                .iter()
+                .map(|link| format!("- [{}]({})", link.label(), link.url))
+                .collect();
+
+            lines.push(bullets.join("\n"));
         }
 
         lines.join("\n\n")
@@ -267,8 +308,11 @@ pub fn mention_before(line: &str, col: usize) -> Option<Mention<'_>> {
 }
 
 /// The whole mention under byte offset `col`, extended past the cursor to the end of the handle.
+///
+/// The `@` itself counts as being inside the mention it opens, so pointing at the sigil answers the same as pointing
+/// at the handle.
 pub fn mention_at(line: &str, col: usize) -> Option<Mention<'_>> {
-    let typed = mention_before(line, col)?;
+    let typed = mention_before(line, col).or_else(|| mention_before(line, col + '@'.len_utf8()))?;
     let tail = &line[typed.end..];
     let end = typed.end + tail.find(|c: char| !is_handle_char(c)).unwrap_or(tail.len());
 
@@ -277,6 +321,18 @@ pub fn mention_at(line: &str, col: usize) -> Option<Mention<'_>> {
         end,
         text: &line[typed.start + '@'.len_utf8()..end],
     })
+}
+
+/// Every mention written on a line, left to right.
+///
+/// Unlike the cursor-driven lookups above this one needs no cursor, so it is what an editor's whole-buffer passes
+/// (document links, and anything else that decorates mentions) are built on.
+pub fn mentions(line: &str) -> Vec<Mention<'_>> {
+    line.match_indices('@')
+        // A cursor sitting on one `@` can still resolve to a mention opened by an earlier one, so keep only the
+        // mention this `@` actually starts. A bare `@` with nothing after it names nobody.
+        .filter_map(|(at, _)| mention_at(line, at).filter(|mention| mention.start == at && !mention.text.is_empty()))
+        .collect()
 }
 
 /// Whether a character can appear in a handle. Alphanumerics are Unicode-wide so accented names work unchanged.
@@ -400,6 +456,14 @@ mod tests {
     }
 
     #[test]
+    fn mention_at_answers_on_the_at_sign_itself() {
+        let mention = mention_at("ping @jdoe", 5).unwrap();
+
+        assert_eq!(mention.start, 5);
+        assert_eq!(mention.text, "jdoe");
+    }
+
+    #[test]
     fn mention_at_extends_past_the_cursor() {
         let mention = mention_at("ping @jdoe today", 8).unwrap();
 
@@ -415,6 +479,57 @@ mod tests {
 
         assert_eq!(mention.text, "cmartin");
         assert_eq!(&line[mention.start..mention.end], "@cmartin");
+    }
+
+    #[test]
+    fn mentions_finds_every_one_on_a_line() {
+        let line = "- [ ] @jdoe et @cmartin, pas jane@example.com";
+        let found = mentions(line);
+
+        let text: Vec<&str> = found.iter().map(|mention| mention.text).collect();
+        assert_eq!(text, ["jdoe", "cmartin"]);
+        assert_eq!(&line[found[1].start..found[1].end], "@cmartin");
+    }
+
+    #[test]
+    fn mentions_skips_a_bare_at_and_never_repeats_a_span() {
+        assert!(mentions("email me @ noon").is_empty());
+        // The second `@` resolves back into the first mention; it must not be reported twice.
+        assert_eq!(mentions("@jd@oe").len(), 1);
+    }
+
+    #[test]
+    fn a_link_falls_back_to_its_host_for_a_label() {
+        let named = Link {
+            name: Some("Chat".into()),
+            url: "https://mail.google.com/chat/u/0/#chat/dm/AAAA".into(),
+        };
+        assert_eq!(named.label(), "Chat");
+
+        let bare = Link {
+            name: None,
+            url: "https://gitlab.affluences.com/luis.valdez".into(),
+        };
+        assert_eq!(bare.label(), "gitlab.affluences.com");
+
+        let odd = Link {
+            name: None,
+            url: "mailto:jane@example.com".into(),
+        };
+        assert_eq!(odd.label(), "mailto:jane@example.com");
+    }
+
+    #[test]
+    fn describe_lists_the_links_as_markdown() {
+        let person = Person {
+            links: vec![Link {
+                name: Some("Chat".into()),
+                url: "https://chat.example.com/dm/1".into(),
+            }],
+            ..person("jdoe", "Jane Doe")
+        };
+
+        assert!(person.describe().contains("- [Chat](https://chat.example.com/dm/1)"));
     }
 
     #[test]

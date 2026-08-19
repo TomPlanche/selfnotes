@@ -138,6 +138,7 @@ impl Server {
             "exit" => Ok(Outcome::Exit),
             "textDocument/completion" => Ok(Outcome::Reply(self.complete(params))),
             "textDocument/hover" => Ok(Outcome::Reply(self.hover(params))),
+            "textDocument/documentLink" => Ok(Outcome::Reply(self.document_links(params))),
             "textDocument/didOpen" => {
                 if let Some(uri) = string_at(params, "/textDocument/uri")
                     && let Some(text) = string_at(params, "/textDocument/text")
@@ -209,6 +210,7 @@ impl Server {
                 "textDocumentSync": { "openClose": true, "change": 1 },
                 "completionProvider": { "triggerCharacters": ["@"], "resolveProvider": false },
                 "hoverProvider": true,
+                "documentLinkProvider": { "resolveProvider": false },
             },
             "serverInfo": { "name": "selfnotes", "version": env!("CARGO_PKG_VERSION") },
         }))
@@ -308,6 +310,46 @@ impl Server {
         })
     }
 
+    /// Every mention in the buffer that points somewhere, as links an editor can follow.
+    ///
+    /// Only the first of a person's links is published: a range can carry one target, and the order in the roster is
+    /// the order you wrote it, so the first entry is the one you reach for.
+    fn document_links(&mut self, params: &Value) -> Value {
+        self.reload_people();
+
+        let Some(uri) = string_at(params, "/textDocument/uri") else {
+            return Value::Null;
+        };
+
+        let Some(text) = self.documents.get(uri) else {
+            return Value::Null;
+        };
+
+        let mut links = Vec::new();
+
+        for (number, line) in text.split('\n').enumerate() {
+            let line = line.strip_suffix('\r').unwrap_or(line);
+
+            for mention in people::mentions(line) {
+                let Some(person) = self.directory.resolve(mention.text) else {
+                    continue;
+                };
+
+                let Some(target) = person.links.first() else {
+                    continue;
+                };
+
+                links.push(json!({
+                    "range": self.span(line, number, mention.start, mention.end),
+                    "target": target.url,
+                    "tooltip": format!("{} ({})", target.label(), person.display_name()),
+                }));
+            }
+        }
+
+        Value::Array(links)
+    }
+
     /// Resolve a request's `textDocument`/`position` pair against the open documents.
     fn cursor(&self, params: &Value) -> Option<Cursor<'_>> {
         let uri = string_at(params, "/textDocument/uri")?;
@@ -325,9 +367,14 @@ impl Server {
 
     /// An LSP range covering the byte offsets `start..end` of the cursor's line.
     fn range(&self, cursor: &Cursor<'_>, start: usize, end: usize) -> Value {
+        self.span(cursor.line, cursor.number, start, end)
+    }
+
+    /// An LSP range covering the byte offsets `start..end` of line `number`, whose text is `line`.
+    fn span(&self, line: &str, number: usize, start: usize, end: usize) -> Value {
         json!({
-            "start": { "line": cursor.number, "character": lsp_col(cursor.line, start, self.encoding) },
-            "end": { "line": cursor.number, "character": lsp_col(cursor.line, end, self.encoding) },
+            "start": { "line": number, "character": lsp_col(line, start, self.encoding) },
+            "end": { "line": number, "character": lsp_col(line, end, self.encoding) },
         })
     }
 }
@@ -687,6 +734,56 @@ mod tests {
         let mut server = server_with("ping @nobody", roster());
 
         assert_eq!(server.hover(&position(0, 8)), Value::Null);
+    }
+
+    #[test]
+    fn document_links_point_at_the_first_link_of_each_mention() {
+        let mut people = roster();
+        people[0].links = vec![
+            people::Link {
+                name: Some("Chat".into()),
+                url: "https://chat.example.com/dm/1".into(),
+            },
+            people::Link {
+                name: None,
+                url: "https://gitlab.example.com/jdoe".into(),
+            },
+        ];
+
+        let mut server = server_with("ping @jdoe\nand @jsmith who has none\n", people);
+        let links = server.document_links(&json!({ "textDocument": { "uri": "file:///notes.md" } }));
+        let links = links.as_array().unwrap();
+
+        // @jsmith carries no link, so no range is published for it.
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0]["target"], "https://chat.example.com/dm/1");
+        assert_eq!(links[0]["tooltip"], "Chat (Jane Doe)");
+        assert_eq!(links[0]["range"]["start"], json!({ "line": 0, "character": 5 }));
+        assert_eq!(links[0]["range"]["end"], json!({ "line": 0, "character": 10 }));
+    }
+
+    #[test]
+    fn document_links_are_empty_when_nobody_has_one() {
+        let mut server = server_with("ping @jdoe", roster());
+
+        let links = server.document_links(&json!({ "textDocument": { "uri": "file:///notes.md" } }));
+
+        assert!(links.as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn document_links_measure_positions_past_multibyte_text() {
+        let mut people = roster();
+        people[0].links = vec![people::Link {
+            name: None,
+            url: "https://chat.example.com/dm/1".into(),
+        }];
+
+        // "réunion" is one byte longer than it is UTF-16 units, so a byte offset would land the range a column early.
+        let mut server = server_with("réunion @jdoe", people);
+        let links = server.document_links(&json!({ "textDocument": { "uri": "file:///notes.md" } }));
+
+        assert_eq!(links[0]["range"]["start"]["character"], 8);
     }
 
     #[test]

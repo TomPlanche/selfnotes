@@ -2,7 +2,9 @@
 
 Completes and describes `@mentions` of the people in your [selfnotes](../../README.md) roster, in Markdown files.
 
-Type `@` in a Markdown buffer and Zed offers everyone in `people.toml`, with their name, role and team. Hover a written `@handle` to see who it is.
+Type `@` in a Markdown buffer and Zed offers everyone in `people.toml`, with their name, role and team. Hover a written `@handle` to see who it is, and to reach the links you attached to them. Cmd-click a mention to open the first of those links.
+
+Completion and hover work in any Zed. Cmd-clicking a mention needs a build from 2026-05-26 or later, when Zed gained `textDocument/documentLink` support.
 
 ## Install
 

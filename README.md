@@ -280,6 +280,10 @@ email   = "jane.doe@example.com"
 team    = "backend"
 role    = "Tech lead"
 aliases = ["jane"]
+links   = [
+  { name = "Chat", url = "https://mail.google.com/chat/u/0/#chat/dm/AAAAqrst" },
+  { url = "https://gitlab.example.com/jdoe" },
+]
 
 [[people]]
 handle = "cmartin"
@@ -288,6 +292,14 @@ team   = "platform"
 ```
 
 Only `handle` is required, and it is what you actually type after the `@`, so it cannot contain spaces. Everything else feeds the description shown beside a completion, and widens what finds the person: typing `@jane` matches an alias, `@doe` matches a word of the name, and `@jane.` matches the local part of the email address. Handles match first, then aliases, then names, then emails.
+
+#### Links
+
+`links` attaches places a person can be reached: their chat thread, their profile page, a shared document. Each entry needs a `url`, and an optional `name` labels it (without one, the URL's host does). Order is the order you wrote, and it matters: the first link is the one a modifier-click opens.
+
+They show up two ways in an editor. Hovering a mention lists all of them as clickable links, and holding the modifier key while clicking the mention itself follows the first one. See [Editor completion](#editor-completion) for what each editor needs.
+
+`selfnotes people import` never touches them: an export knows usernames, not where you talk to someone, so links you add by hand survive re-importing.
 
 `selfnotes people` lists the roster and flags any handle that could never be typed after an `@`.
 
@@ -366,7 +378,8 @@ people_file = "~/work/people.toml"
 `selfnotes lsp` serves the roster over the Language Server Protocol on stdin and stdout. An editor starts it; you never run it by hand. It offers two things in Markdown buffers:
 
 - Completion after an `@`, showing each person's name, role and team, and inserting `@handle`.
-- Hover over a written `@handle`, showing who it is.
+- Hover over a written `@handle`, showing who it is and listing their [links](#links) as clickable ones.
+- A document link on every mention of someone who has links, so cmd-clicking (ctrl-clicking on Linux and Windows) the mention opens the first of them.
 
 The `@` in an email address is left alone, so `jane@example.com` never opens a completion popup. The roster is re-read whenever the file changes, so adding a colleague takes effect on the next keystroke rather than the next restart. Which roster applies is resolved from the workspace the editor opened, so the override above works inside the editor too.
 
@@ -379,6 +392,8 @@ The extension in `editors/zed` starts the language server for Markdown files. It
 3. Click `Install Dev Extension` and pick the `editors/zed` directory.
 
 Zed builds the extension to WebAssembly on install, which needs the `wasm32-wasip2` target (`rustup target add wasm32-wasip2`).
+
+Completion and hover work in any Zed. Cmd-clicking a mention to open a link needs a build from 2026-05-26 or later, when Zed gained `textDocument/documentLink` support; before that the request goes unanswered and nothing else changes. The `lsp_document_links` editor setting, which is on by default, turns the feature off if you ever want it gone.
 
 If Zed cannot find the binary, a GUI launch inherits a shorter `$PATH` than your terminal does. Point it at the binary directly in your Zed settings:
 
