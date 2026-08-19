@@ -829,8 +829,11 @@ fn participating_layers(cwd: &Path) -> Result<Vec<Layer>> {
     }
 
     if let Some(path) = config::find_local_config(cwd)
-        && let Some(config) = config::read_config_file(&path)?
+        && let Some(mut config) = config::read_config_file(&path)?
     {
+        // Stamped exactly as loading does, so a local folder is checked against the directory it will really land in.
+        config::root_local_folders(&mut config, &path);
+
         layers.push(Layer {
             label: path.display().to_string(),
             is_local: true,
@@ -932,9 +935,11 @@ fn check_folder(folder: &FolderConfig, root: Option<&Path>, source: &str, proble
         );
     }
 
-    // Skip when the root is unresolved, otherwise this just repeats the root error for every folder.
-    if let Some(root) = root
-        && let Err(err) = entry::folder_dir_in(root, folder)
+    // A folder declared by a local config resolves against that file's directory rather than the journal root, so
+    // check it against the same base the run would use. Skip when neither is known, otherwise this just repeats the
+    // root error for every folder.
+    if let Some(base) = folder.base_dir.as_deref().or(root)
+        && let Err(err) = entry::folder_dir_in(base, folder)
     {
         problems.error(source, format!("folder `{name}`: {err:#}"));
     }

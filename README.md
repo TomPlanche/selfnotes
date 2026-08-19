@@ -119,7 +119,7 @@ In the rendered template, the date placeholders describe the day the entry is *f
 
 ## Listing entries
 
-`selfnotes list` (aliased as `selfnotes recent`) scans the journal and every custom folder and prints the entries most recently modified, newest first, so you can find a note without opening the editor. Each line is the modification time, the source (`journal` or a folder name), and the entry path relative to the journal root:
+`selfnotes list` (aliased as `selfnotes recent`) scans the journal and every custom folder and prints the entries most recently modified, newest first, so you can find a note without opening the editor. Each line is the modification time, the source (`journal` or a folder name), and the entry path relative to the journal root (absolute when the entry sits outside it):
 
 ```
 2026-07-17 09:00  journal  2026/07/17.md
@@ -133,7 +133,7 @@ Pass `-n`/`--limit` to change how many entries are shown (default 10). Pass `--f
 
 `selfnotes search <query>` scans the text of every note and prints the ones that contain the query, newest first. The query is matched literally, not as a regular expression, and matching is case-insensitive unless you pass `-s`/`--case-sensitive`.
 
-Each note gets a header (its source, path relative to the journal root, frontmatter title if it has one, and how many of its lines matched) followed by the matching lines, each prefixed with its line number in the file:
+Each note gets a header (its source, path relative to the journal root or absolute when it sits outside, frontmatter title if it has one, and how many of its lines matched) followed by the matching lines, each prefixed with its line number in the file:
 
 ```
 $ selfnotes search "login bug"
@@ -428,6 +428,30 @@ Scalar keys (`journal_root`, `format`, `editor`, `cursor_format`, `space_replace
 
 `selfnotes config new` writes the local layer for you: a `.selfnotes.toml` in the current directory, holding a commented starting point rather than an empty file. Nothing has to be registered anywhere, since a run finds it by walking up. Dropping it at the root of a tree therefore configures that whole tree, and only the nearest one applies: a copy in a subdirectory replaces its ancestor rather than adding to it. An existing file is never overwritten, so re-running the command changes nothing.
 
+### Where a folder's entries land
+
+A custom folder's `path` (defaulting to the folder's own name) is resolved against the journal root, so a `ticket` folder in the global config writes to `<journal-root>/tickets/`.
+
+A folder declared in a local `.selfnotes.toml` is resolved against that file's own directory instead. A `.selfnotes.toml` marks the root of a tree, so a folder declared there belongs to that tree rather than to whatever journal root the global config happens to name:
+
+```toml
+# ~/work/project/.selfnotes.toml
+[[custom_folders]]
+name = "idea"
+path = "ideas"
+```
+
+```
+selfnotes new idea "ship it"   # -> ~/work/project/ideas/ship-it.md
+selfnotes                      # -> <journal-root>/2026/08/20.md, unchanged
+```
+
+The directory is created on demand, and the rule holds wherever in the tree you run from, since the config is found by walking up: running from `~/work/project/src` still writes to `~/work/project/ideas/`.
+
+Only the folders declared locally move. The journal is not declared in a folder, so it stays at `journal_root`, and folders that come from the global config keep resolving against it too. To put a local config's folders under a root of their own, give that config a `journal_root`: setting one means the file has said where its notes live, and its folders resolve against it exactly as the global config's do.
+
+Entries created this way sit outside the journal root, so `selfnotes list` and `selfnotes search` print them as absolute paths rather than relative ones. They are indexed, searched, tagged and opened like any other note.
+
 ### Path-scoped overrides
 
 The global config can declare `[[overrides]]` entries, each pairing a glob `path` with a `config` file. When the current working directory matches the glob, that config is layered on top of the global config (but below any local `.selfnotes.toml`). This lets a whole directory tree pick up its own defaults without a `.selfnotes.toml` in each project.
@@ -514,7 +538,7 @@ A name that already contains no spaces is untouched, so switching the key on doe
 
 ### Validating the configuration
 
-`selfnotes config validate` checks every config file that contributes to the effective configuration and prints a verdict (`valid` / `INVALID`) per file, with each problem attributed to the file it came from. It exits non-zero when any file is invalid, so it fits in scripts and pre-flight checks. The blocking problems are: an unset `journal_root`, a custom folder whose directory would escape the journal root (via its `path` or a name containing `..`), a folder `name` containing a path separator (`/` or `\`), a `space_replacement` (top level or per folder) containing a path separator, and a referenced `template_file` (journal or folder) that does not exist. A `field_order` entry naming a field that no field declares is reported as a warning rather than an error.
+`selfnotes config validate` checks every config file that contributes to the effective configuration and prints a verdict (`valid` / `INVALID`) per file, with each problem attributed to the file it came from. It exits non-zero when any file is invalid, so it fits in scripts and pre-flight checks. The blocking problems are: an unset `journal_root`, a custom folder whose directory would escape the root it resolves against (via its `path` or a name containing `..`), a folder `name` containing a path separator (`/` or `\`), a `space_replacement` (top level or per folder) containing a path separator, and a referenced `template_file` (journal or folder) that does not exist. A `field_order` entry naming a field that no field declares is reported as a warning rather than an error.
 
 Each file is judged on what actually takes effect: a folder or journal template shadowed by a higher-priority layer is not re-checked, and folder directories are resolved against the effective journal root even when a given file does not set its own root. The set of files checked mirrors what loading merges: the global config, each matching override's referenced config, and the nearest local `.selfnotes.toml`.
 

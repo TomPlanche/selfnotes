@@ -42,7 +42,8 @@ pub const LOCAL_CONFIG_TEMPLATE: &str = "\
 
 # [[custom_folders]]
 # name = \"ticket\"
-# # Directory under the journal root; defaults to the folder's own name.
+# # Directory, resolved against this file's own directory; defaults to the folder's
+# # own name. Set `journal_root` above to put these folders under it instead.
 # path = \"tickets\"
 # template_file = \"~/work/templates/ticket.md\"
 # # Added to the `default_tags` above, for this folder's entries only.
@@ -234,6 +235,12 @@ pub struct FolderConfig {
     /// listed follows in declaration order. Unknown names are ignored.
     #[serde(default)]
     pub field_order: Vec<String>,
+    /// Directory that `path` is resolved against, in place of the journal root.
+    ///
+    /// Not a config key: it is stamped at load time onto the folders declared by a local `.selfnotes.toml` that sets
+    /// no `journal_root` of its own, and holds that file's directory. See [`local_folder_base`].
+    #[serde(skip)]
+    pub base_dir: Option<PathBuf>,
 }
 
 impl FolderConfig {
@@ -459,12 +466,35 @@ pub fn load() -> Result<Config> {
     apply_overrides(&mut config, &cwd)?;
 
     if let Some(local_path) = find_local_config(&cwd)
-        && let Some(local) = read_config_file(&local_path)?
+        && let Some(mut local) = read_config_file(&local_path)?
     {
+        root_local_folders(&mut local, &local_path);
         config.overlay(local);
     }
 
     Ok(config)
+}
+
+/// Point the folders declared by the local config at `path` at that file's own directory.
+///
+/// A `.selfnotes.toml` marks the root of a tree, so a folder declared there belongs to that tree: `path = "ideas"` in
+/// `~/work/.selfnotes.toml` means `~/work/ideas`, not a directory in whatever journal root the global config happens
+/// to name. The journal is left alone, since it is not declared here and stays wherever `journal_root` puts it.
+///
+/// A local config that sets its own `journal_root` has already said where its notes live, so its folders keep
+/// resolving against that and nothing is stamped.
+pub fn root_local_folders(config: &mut Config, path: &Path) {
+    if config.journal_root.is_some() {
+        return;
+    }
+
+    let Some(base) = path.parent() else {
+        return;
+    };
+
+    for folder in &mut config.custom_folders {
+        folder.base_dir = Some(base.to_path_buf());
+    }
 }
 
 /// Overlay every override config whose glob matches `cwd`, in declaration order.
@@ -619,6 +649,40 @@ pub fn expand_tilde(path: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A local config declaring one folder, as read from `dir/.selfnotes.toml`.
+    fn local_with_folder(journal_root: Option<&str>) -> Config {
+        Config {
+            journal_root: journal_root.map(str::to_owned),
+            custom_folders: vec![FolderConfig {
+                name: "idea".into(),
+                path: Some("ideas".into()),
+                ..FolderConfig::default()
+            }],
+            ..Config::default()
+        }
+    }
+
+    #[test]
+    fn local_folders_are_rooted_beside_their_config() {
+        let mut config = local_with_folder(None);
+
+        root_local_folders(&mut config, Path::new("/home/u/work/.selfnotes.toml"));
+
+        assert_eq!(
+            config.custom_folders[0].base_dir.as_deref(),
+            Some(Path::new("/home/u/work"))
+        );
+    }
+
+    #[test]
+    fn a_local_journal_root_keeps_folders_relative_to_it() {
+        let mut config = local_with_folder(Some("/home/u/work/journal"));
+
+        root_local_folders(&mut config, Path::new("/home/u/work/.selfnotes.toml"));
+
+        assert_eq!(config.custom_folders[0].base_dir, None);
+    }
 
     #[test]
     fn overlay_prefers_local_scalars() {

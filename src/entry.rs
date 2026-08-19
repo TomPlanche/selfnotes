@@ -95,9 +95,16 @@ pub fn create_folder_entry(
 
 /// Resolve the directory a folder's entries live in: `<root>/<folder.path-or-name>`.
 ///
-/// Errors if the directory escapes the journal root, so callers can validate before prompting the user for anything.
+/// The root is the folder's own `base_dir` when it has one (a folder declared by a local `.selfnotes.toml` lives in
+/// that file's tree), and the effective `journal_root` otherwise. Note that the rest of a run still wants a
+/// `journal_root`, for the journal itself and for the workspace argument the editor is opened with.
+///
+/// Errors if the directory escapes that root, so callers can validate before prompting the user for anything.
 pub fn folder_dir(config: &Config, folder: &FolderConfig) -> Result<PathBuf> {
-    folder_dir_in(&config.resolved_journal_root()?, folder)
+    match &folder.base_dir {
+        Some(base) => folder_dir_in(base, folder),
+        None => folder_dir_in(&config.resolved_journal_root()?, folder),
+    }
 }
 
 /// Resolve a folder's directory under an explicit `root`, validating it stays inside.
@@ -156,7 +163,7 @@ fn ensure_within_root(root: &Path, path: &Path) -> Result<()> {
 
     anyhow::ensure!(
         normalized.starts_with(lexical_normalize(root)),
-        "resolved entry path {} escapes the journal root {}",
+        "resolved entry path {} escapes its root {}",
         normalized.display(),
         root.display(),
     );
@@ -482,6 +489,54 @@ mod tests {
         };
 
         assert_eq!(folder_dir_in(root, &folder).unwrap(), root.join("idea"));
+    }
+
+    #[test]
+    fn folder_dir_prefers_the_folders_own_base() {
+        // A folder declared by `~/work/.selfnotes.toml` lands in that tree, not in the journal root.
+        let config = Config {
+            journal_root: Some("/home/u/notes".into()),
+            ..Config::default()
+        };
+        let folder = FolderConfig {
+            name: "idea".into(),
+            path: Some("ideas".into()),
+            base_dir: Some(PathBuf::from("/home/u/work")),
+            ..FolderConfig::default()
+        };
+
+        assert_eq!(folder_dir(&config, &folder).unwrap(), Path::new("/home/u/work/ideas"));
+    }
+
+    #[test]
+    fn folder_dir_without_a_base_uses_the_journal_root() {
+        let config = Config {
+            journal_root: Some("/home/u/notes".into()),
+            ..Config::default()
+        };
+        let folder = FolderConfig {
+            name: "idea".into(),
+            path: Some("ideas".into()),
+            ..FolderConfig::default()
+        };
+
+        assert_eq!(folder_dir(&config, &folder).unwrap(), Path::new("/home/u/notes/ideas"));
+    }
+
+    #[test]
+    fn folder_dir_rejects_a_path_escaping_its_own_base() {
+        let config = Config {
+            journal_root: Some("/home/u/notes".into()),
+            ..Config::default()
+        };
+        let folder = FolderConfig {
+            name: "idea".into(),
+            path: Some("../../secret".into()),
+            base_dir: Some(PathBuf::from("/home/u/work")),
+            ..FolderConfig::default()
+        };
+
+        assert!(folder_dir(&config, &folder).is_err());
     }
 
     #[test]
