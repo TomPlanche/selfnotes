@@ -520,7 +520,29 @@ name = "idea"
 space_replacement = "_"
 ```
 
-Running `selfnotes new` with no folder shows a picker of the configured folder names (via `dialoguer`), then prompts for the entry name.
+Running `selfnotes new` with no folder shows a picker of the configured folder names (via `dialoguer`), then prompts for the entry name:
+
+```
+? Folder ›
+❯ ticket (global)
+  idea (local)
+```
+
+Naming a folder that is not configured lists the ones that are, so a typo does not send you back to the config file to remember them:
+
+```
+selfnotes new note
+Error: no folder `note` is configured (`ticket`, `idea` expected)
+```
+
+Once the folders come from more than one config, each name says which one declared it, since that is when a name being missing (or being not quite the one you meant) is worth tracing to a file:
+
+```
+selfnotes new note
+Error: no folder `note` is configured (`ticket` (global), `idea` (local) expected)
+```
+
+The picker and the error label the folders identically, and both drop the label when a single config declares them all. The label is the config that actually won: a folder declared globally and redeclared in a local `.selfnotes.toml` is reported as `local`, because that is the declaration in effect. `--folder` on `list`, `search` and `tags` reports the same list, with `journal` in it.
 
 ### Spaces in entry names
 

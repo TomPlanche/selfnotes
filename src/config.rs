@@ -211,6 +211,28 @@ pub struct JournalConfig {
     pub carry_over_section: Option<String>,
 }
 
+/// The config layer a folder was declared in, so a message can say where a name came from.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum FolderSource {
+    /// The global config.
+    #[default]
+    Global,
+    /// A config file pulled in by a path-scoped `[[overrides]]` entry.
+    Override,
+    /// The nearest local `.selfnotes.toml`.
+    Local,
+}
+
+impl fmt::Display for FolderSource {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Global => "global",
+            Self::Override => "override",
+            Self::Local => "local",
+        })
+    }
+}
+
 /// Settings for a user-defined folder such as `ticket`.
 #[derive(Debug, Default, Clone, Deserialize, Serialize)]
 pub struct FolderConfig {
@@ -238,9 +260,12 @@ pub struct FolderConfig {
     /// Directory that `path` is resolved against, in place of the journal root.
     ///
     /// Not a config key: it is stamped at load time onto the folders declared by a local `.selfnotes.toml` that sets
-    /// no `journal_root` of its own, and holds that file's directory. See [`local_folder_base`].
+    /// no `journal_root` of its own, and holds that file's directory. See [`root_local_folders`].
     #[serde(skip)]
     pub base_dir: Option<PathBuf>,
+    /// Which config file declared this folder. Not a config key: it is stamped at load time. See [`mark_folders`].
+    #[serde(skip)]
+    pub source: FolderSource,
 }
 
 impl FolderConfig {
@@ -359,6 +384,45 @@ impl Config {
         self.custom_folders.iter().find(|folder| folder.name == name)
     }
 
+    /// The configured folder names, in configuration order, as the folder picker lists them.
+    pub fn folder_labels(&self) -> Vec<String> {
+        self.labelled_folders("")
+    }
+
+    /// The configured folder names as a backticked, comma-separated list, ready to drop into a message.
+    pub fn folder_names(&self) -> String {
+        self.labelled_folders("`").join(", ")
+    }
+
+    /// The configured folder names, each wrapped in `quote` and carrying the config it was declared in.
+    ///
+    /// The label is only added once the folders come from more than one config, which is when a name being missing,
+    /// or not being quite the one you meant, is worth tracing to a file. With a single source it would just repeat on
+    /// every name, saying nothing.
+    ///
+    /// Shared by the picker and the messages listing what a folder argument accepts, so the two never describe the
+    /// same folders differently.
+    fn labelled_folders(&self, quote: &str) -> Vec<String> {
+        let mixed = self
+            .custom_folders
+            .windows(2)
+            .any(|pair| pair[0].source != pair[1].source);
+
+        self.custom_folders
+            .iter()
+            .map(|folder| {
+                let name = &folder.name;
+                let name = format!("{quote}{name}{quote}");
+
+                if mixed {
+                    format!("{name} ({})", folder.source)
+                } else {
+                    name
+                }
+            })
+            .collect()
+    }
+
     /// Resolve the effective journal root, expanding a leading `~`.
     pub fn resolved_journal_root(&self) -> Result<PathBuf> {
         let root = self
@@ -455,8 +519,9 @@ pub fn load() -> Result<Config> {
     let mut config = Config::default();
 
     if let Some(global_path) = global_config_path()
-        && let Some(global) = read_config_file(&global_path)?
+        && let Some(mut global) = read_config_file(&global_path)?
     {
+        mark_folders(&mut global, FolderSource::Global);
         config.overlay(global);
     }
 
@@ -469,10 +534,21 @@ pub fn load() -> Result<Config> {
         && let Some(mut local) = read_config_file(&local_path)?
     {
         root_local_folders(&mut local, &local_path);
+        mark_folders(&mut local, FolderSource::Local);
         config.overlay(local);
     }
 
     Ok(config)
+}
+
+/// Record which config layer every folder in `config` was declared in.
+///
+/// Overlaying replaces a same-named folder outright, so the stamp that survives the merge is the one on the
+/// declaration that actually took effect.
+fn mark_folders(config: &mut Config, source: FolderSource) {
+    for folder in &mut config.custom_folders {
+        folder.source = source;
+    }
 }
 
 /// Point the folders declared by the local config at `path` at that file's own directory.
@@ -506,7 +582,8 @@ fn apply_overrides(config: &mut Config, cwd: &Path) -> Result<()> {
     let overrides = std::mem::take(&mut config.overrides);
 
     for path in matching_override_paths(&overrides, cwd)? {
-        if let Some(scoped) = read_config_file(&path)? {
+        if let Some(mut scoped) = read_config_file(&path)? {
+            mark_folders(&mut scoped, FolderSource::Override);
             config.overlay(scoped);
         }
     }
@@ -663,6 +740,77 @@ mod tests {
         }
     }
 
+    /// A config whose folders are named by `names`, each stamped with the layer it came from.
+    fn config_with_folders(names: &[(&str, FolderSource)]) -> Config {
+        Config {
+            custom_folders: names
+                .iter()
+                .map(|(name, source)| FolderConfig {
+                    name: (*name).to_owned(),
+                    source: *source,
+                    ..FolderConfig::default()
+                })
+                .collect(),
+            ..Config::default()
+        }
+    }
+
+    #[test]
+    fn folder_names_are_bare_when_one_config_declares_them_all() {
+        let config = config_with_folders(&[
+            ("a", FolderSource::Global),
+            ("b", FolderSource::Global),
+            ("c", FolderSource::Global),
+        ]);
+
+        assert_eq!(config.folder_names(), "`a`, `b`, `c`");
+    }
+
+    #[test]
+    fn folder_names_name_their_config_once_several_declare_them() {
+        let config = config_with_folders(&[
+            ("a", FolderSource::Global),
+            ("b", FolderSource::Local),
+            ("c", FolderSource::Override),
+        ]);
+
+        assert_eq!(config.folder_names(), "`a` (global), `b` (local), `c` (override)");
+    }
+
+    #[test]
+    fn folder_names_is_empty_without_folders() {
+        assert!(Config::default().folder_names().is_empty());
+    }
+
+    #[test]
+    fn folder_labels_drop_the_backticks_the_picker_would_show_literally() {
+        let config = config_with_folders(&[("a", FolderSource::Global), ("b", FolderSource::Global)]);
+
+        assert_eq!(config.folder_labels(), ["a", "b"]);
+    }
+
+    #[test]
+    fn folder_labels_name_their_config_once_several_declare_them() {
+        let config = config_with_folders(&[("a", FolderSource::Global), ("b", FolderSource::Local)]);
+
+        assert_eq!(config.folder_labels(), ["a (global)", "b (local)"]);
+    }
+
+    #[test]
+    fn folder_labels_stay_in_configuration_order() {
+        // The picker indexes its choice straight back into `custom_folders`, so the two must not drift apart.
+        let config = config_with_folders(&[
+            ("zeta", FolderSource::Local),
+            ("alpha", FolderSource::Global),
+            ("mid", FolderSource::Override),
+        ]);
+
+        assert_eq!(
+            config.folder_labels(),
+            ["zeta (local)", "alpha (global)", "mid (override)"]
+        );
+    }
+
     #[test]
     fn local_folders_are_rooted_beside_their_config() {
         let mut config = local_with_folder(None);
@@ -701,6 +849,16 @@ mod tests {
         assert_eq!(global.journal_root.as_deref(), Some("/local"));
         // Untouched scalar is preserved from the global layer.
         assert_eq!(global.format.as_deref(), Some("md"));
+    }
+
+    #[test]
+    fn overlay_keeps_the_source_of_the_declaration_that_won() {
+        let mut global = config_with_folders(&[("ticket", FolderSource::Global), ("idea", FolderSource::Global)]);
+
+        global.overlay(config_with_folders(&[("ticket", FolderSource::Local)]));
+
+        // `ticket` is replaced by the local declaration and reports it; `idea`, untouched, still reports the global.
+        assert_eq!(global.folder_names(), "`ticket` (local), `idea` (global)");
     }
 
     #[test]

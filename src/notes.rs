@@ -78,12 +78,23 @@ pub fn walk(config: &Config, folder: Option<&str>) -> Result<Vec<NoteFile>> {
         Some(name) => {
             let folder = config
                 .folder(name)
-                .with_context(|| format!("no folder `{name}` is configured"))?;
+                .with_context(|| format!("no folder `{name}` is configured ({} expected)", folder_choices(config)))?;
             collect_folder(config, folder, &mut out)?;
         },
     }
 
     Ok(out)
+}
+
+/// The values `--folder` accepts: the built-in journal, plus every configured folder.
+fn folder_choices(config: &Config) -> String {
+    let folders = config.folder_names();
+
+    if folders.is_empty() {
+        format!("`{JOURNAL_SOURCE}`")
+    } else {
+        format!("`{JOURNAL_SOURCE}`, {folders}")
+    }
 }
 
 /// Build an [`Index`] by walking the notes and parsing each file's tags and links.

@@ -53,7 +53,12 @@ fn main() -> Result<()> {
             let folder_config = match folder {
                 Some(folder) => config
                     .folder(&folder)
-                    .with_context(|| format!("no folder `{folder}` is configured"))?
+                    .with_context(|| {
+                        format!(
+                            "no folder `{folder}` is configured ({} expected)",
+                            config.folder_names()
+                        )
+                    })?
                     .clone(),
                 None => select_folder(&config)?,
             };
@@ -358,14 +363,12 @@ fn maybe_open(config: &Config, entry: &Entry, no_open: bool) {
 
 /// Interactively pick one of the configured folders.
 fn select_folder(config: &Config) -> Result<FolderConfig> {
-    let names: Vec<&str> = config
-        .custom_folders
-        .iter()
-        .map(|folder| folder.name.as_str())
-        .collect();
+    // Labelled exactly as the "no folder `x` is configured" message lists them, so the picker and the error describe
+    // the same folders the same way. The order matches `custom_folders`, so the choice indexes straight back into it.
+    let labels = config.folder_labels();
     let choice = Select::with_theme(&ColorfulTheme::default())
         .with_prompt("Folder")
-        .items(&names)
+        .items(&labels)
         .default(0)
         .interact()
         .context("selecting a folder")?;
