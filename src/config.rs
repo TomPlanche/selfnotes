@@ -4,15 +4,40 @@
 //! at `~/.config/selfnotes/config.toml`, any path-scoped `[[overrides]]` from the
 //! global config whose glob matches the working directory, and a local
 //! `.selfnotes.toml` found by walking up from the current directory.
+//!
+//! `selfnotes config new` writes the middle layer: a [`OVERRIDE_CONFIG_NAME`] file in the current directory, plus the
+//! `[[overrides]]` entry in the global config that points at it.
 
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use glob::Pattern;
 use serde::{Deserialize, Serialize};
 
 /// File name used for local, per-project configuration.
 pub const LOCAL_CONFIG_NAME: &str = ".selfnotes.toml";
+
+/// File name written by `selfnotes config new` for a config a path-scoped override points at.
+///
+/// Deliberately not [`LOCAL_CONFIG_NAME`]: that name is picked up by the local layer on its own, and a file that
+/// arrives through both layers would make the override look like it does nothing.
+pub const OVERRIDE_CONFIG_NAME: &str = "selfnotes.config";
+
+/// Starting point written by `selfnotes config new` into a new [`OVERRIDE_CONFIG_NAME`].
+pub const OVERRIDE_CONFIG_TEMPLATE: &str = "\
+# Layered on top of the global config whenever the working directory matches the
+# `[[overrides]]` entry that `selfnotes config new` wrote into the global config.
+# A local `.selfnotes.toml` still wins over what is set here.
+#
+# Any top-level key of the global config belongs in this file, for example:
+
+# journal_root = \"~/work/journal\"
+# people_file  = \"~/work/people.toml\"
+# default_tags = [\"work\"]
+
+# [journal]
+# template_file = \"~/work/templates/journal.md\"
+";
 
 /// Default file extension used when none is configured.
 pub const DEFAULT_FORMAT: &str = "md";
@@ -361,16 +386,100 @@ fn matching_override_paths(overrides: &[Override], cwd: &Path) -> Result<Vec<Pat
     let mut paths = Vec::new();
 
     for entry in overrides {
-        let pattern = expand_tilde(&entry.path);
-        let pattern = Pattern::new(&pattern.to_string_lossy())
-            .with_context(|| format!("invalid override glob `{}`", entry.path))?;
-
-        if pattern.matches_path(cwd) {
+        if glob_selects_dir(&entry.path, cwd)? {
             paths.push(expand_tilde(&entry.config));
         }
     }
 
     Ok(paths)
+}
+
+/// Whether the override glob `glob` selects the directory `dir`. A leading `~` is expanded and `**` spans separators.
+///
+/// A trailing `/**` also selects the base directory itself. `~/work/**` is how a whole tree is written, and a tree
+/// includes its own root, but the `glob` crate's `**` only spans the components *below* its parent: without this,
+/// a config created for `~/work` would go unread by a `selfnotes` run from `~/work`.
+fn glob_selects_dir(glob: &str, dir: &Path) -> Result<bool> {
+    let expanded = expand_tilde(glob);
+    let expanded = expanded.to_string_lossy();
+    let pattern = compile_glob(&expanded, glob)?;
+
+    if pattern.matches_path(dir) {
+        return Ok(true);
+    }
+
+    match expanded.strip_suffix("/**") {
+        Some(base) => Ok(compile_glob(base, glob)?.matches_path(dir)),
+        None => Ok(false),
+    }
+}
+
+/// Compile `pattern`, reporting the failure against the glob as the user wrote it.
+fn compile_glob(pattern: &str, as_written: &str) -> Result<Pattern> {
+    Pattern::new(pattern).with_context(|| format!("invalid override glob `{as_written}`"))
+}
+
+/// The glob covering `dir` and everything under it, as `config new` writes it into a new override.
+pub fn override_glob_for(dir: &Path) -> String {
+    format!("{}/**", dir.to_string_lossy().trim_end_matches('/'))
+}
+
+/// Check that `glob` compiles as an override pattern, so a bad one is caught before anything is written.
+pub fn check_override_glob(glob: &str) -> Result<()> {
+    let expanded = expand_tilde(glob);
+
+    compile_glob(&expanded.to_string_lossy(), glob)?;
+
+    Ok(())
+}
+
+/// An `[[overrides]]` entry rendered as TOML, ready to append to a config file.
+fn render_override(entry: &Override) -> String {
+    // `toml::Value`'s own rendering handles the quoting, so a path holding a quote or a backslash cannot produce a
+    // file that no longer parses.
+    format!(
+        "[[overrides]]\npath = {}\nconfig = {}\n",
+        toml::Value::String(entry.path.clone()),
+        toml::Value::String(entry.config.clone()),
+    )
+}
+
+/// Append an `[[overrides]]` entry to the text of a config file, returning the new text.
+///
+/// The file is edited as text rather than re-serialized from a parsed [`Config`], so the comments, key order and
+/// formatting of a hand-written global config survive. The result is parsed before it is returned, and text that no
+/// longer holds exactly the overrides it should aborts rather than overwriting a working config.
+pub fn append_override(text: &str, entry: &Override) -> Result<String> {
+    let before: Config = toml::from_str(text).context("re-reading the config before the edit")?;
+
+    let mut updated = text.to_owned();
+
+    // A file that does not end in a newline would otherwise swallow the appended header, and entries read better with
+    // a blank line between them. Neither applies to an empty file.
+    if !updated.is_empty() && !updated.ends_with('\n') {
+        updated.push('\n');
+    }
+
+    if !updated.is_empty() && !updated.ends_with("\n\n") {
+        updated.push('\n');
+    }
+
+    updated.push_str(&render_override(entry));
+
+    let after: Config = toml::from_str(&updated).context("the edited config is no longer valid TOML")?;
+
+    if after.overrides.len() != before.overrides.len() + 1 {
+        bail!(
+            "appending the override left {} entries where {} were expected",
+            after.overrides.len(),
+            before.overrides.len() + 1
+        );
+    }
+
+    match after.overrides.last() {
+        Some(last) if last.path == entry.path && last.config == entry.config => Ok(updated),
+        _ => bail!("the appended override did not read back as it was written"),
+    }
 }
 
 /// Path to the global config file, if a config directory can be determined.
@@ -395,14 +504,11 @@ pub fn find_local_config(start: &Path) -> Option<PathBuf> {
     None
 }
 
-/// Whether an override's glob matches `dir`. A leading `~` is expanded and `**` spans separators. Errors when the
-/// glob is invalid.
+/// Whether an override's glob matches `dir`. Errors when the glob is invalid.
+///
+/// See [`glob_selects_dir`] for what a glob matches.
 pub fn override_matches(entry: &Override, dir: &Path) -> Result<bool> {
-    let pattern = expand_tilde(&entry.path);
-    let pattern =
-        Pattern::new(&pattern.to_string_lossy()).with_context(|| format!("invalid override glob `{}`", entry.path))?;
-
-    Ok(pattern.matches_path(dir))
+    glob_selects_dir(&entry.path, dir)
 }
 
 /// Read and parse a config file, returning `None` if it does not exist.
@@ -584,6 +690,149 @@ mod tests {
         .to_string();
 
         assert!(error.contains("people_file"), "{error}");
+    }
+
+    #[test]
+    fn a_trailing_double_star_also_selects_the_base_directory() {
+        // Regression: `config new` writes `<dir>/**`, and the `glob` crate's `**` spans only the components below its
+        // parent. Without the base-directory case, a config created for `~/work` went unread by a run from `~/work`.
+        let entry = Override {
+            path: "/Affluences/**".into(),
+            config: "/tmp/afl.toml".into(),
+        };
+
+        assert!(override_matches(&entry, Path::new("/Affluences")).unwrap());
+        assert!(override_matches(&entry, Path::new("/Affluences/afl-notes")).unwrap());
+        assert!(override_matches(&entry, Path::new("/Affluences/afl-notes/deep")).unwrap());
+        // A sibling sharing the prefix is still not under the tree.
+        assert!(!override_matches(&entry, Path::new("/Affluences-old")).unwrap());
+    }
+
+    #[test]
+    fn override_glob_covers_the_directory_and_its_tree() {
+        let glob = override_glob_for(Path::new("/Users/tom/work"));
+
+        assert_eq!(glob, "/Users/tom/work/**");
+
+        let entry = Override {
+            path: glob,
+            config: "/Users/tom/work/selfnotes.config".into(),
+        };
+
+        assert!(override_matches(&entry, Path::new("/Users/tom/work")).unwrap());
+        assert!(override_matches(&entry, Path::new("/Users/tom/work/notes")).unwrap());
+        assert!(!override_matches(&entry, Path::new("/Users/tom")).unwrap());
+    }
+
+    #[test]
+    fn override_glob_does_not_double_the_separator_at_the_root() {
+        assert_eq!(override_glob_for(Path::new("/")), "/**");
+    }
+
+    #[test]
+    fn appending_an_override_leaves_the_rest_of_the_file_alone() {
+        let text = "\
+# My notes live here.
+journal_root = \"~/notes\"
+
+[[custom_folders]]
+name = \"ticket\"
+";
+
+        let updated = append_override(
+            text,
+            &Override {
+                path: "/Users/tom/work/**".into(),
+                config: "/Users/tom/work/selfnotes.config".into(),
+            },
+        )
+        .unwrap();
+
+        assert!(updated.starts_with(text), "{updated}");
+
+        // An array-of-tables header appended after another one still parses, and nothing else moved.
+        let config: Config = toml::from_str(&updated).unwrap();
+        assert_eq!(config.journal_root.as_deref(), Some("~/notes"));
+        assert_eq!(config.custom_folders.len(), 1);
+        assert_eq!(config.overrides.len(), 1);
+        assert_eq!(config.overrides[0].path, "/Users/tom/work/**");
+        assert_eq!(config.overrides[0].config, "/Users/tom/work/selfnotes.config");
+    }
+
+    #[test]
+    fn appending_an_override_to_an_empty_config_starts_at_the_first_line() {
+        let updated = append_override(
+            "",
+            &Override {
+                path: "~/work/**".into(),
+                config: "~/work/selfnotes.config".into(),
+            },
+        )
+        .unwrap();
+
+        assert!(updated.starts_with("[[overrides]]\n"), "{updated}");
+        assert_eq!(toml::from_str::<Config>(&updated).unwrap().overrides.len(), 1);
+    }
+
+    #[test]
+    fn appending_an_override_keeps_the_existing_ones() {
+        let text = "\
+[[overrides]]
+path = \"~/first/**\"
+config = \"~/first/selfnotes.config\"
+";
+
+        let updated = append_override(
+            text,
+            &Override {
+                path: "~/second/**".into(),
+                config: "~/second/selfnotes.config".into(),
+            },
+        )
+        .unwrap();
+
+        let config: Config = toml::from_str(&updated).unwrap();
+        let paths: Vec<&str> = config.overrides.iter().map(|over| over.path.as_str()).collect();
+
+        assert_eq!(paths, ["~/first/**", "~/second/**"]);
+    }
+
+    #[test]
+    fn appending_an_override_quotes_a_path_that_would_break_the_file() {
+        let updated = append_override(
+            "",
+            &Override {
+                path: "/tmp/we\"ird\\**".into(),
+                config: "/tmp/we\"ird/selfnotes.config".into(),
+            },
+        )
+        .unwrap();
+
+        let config: Config = toml::from_str(&updated).unwrap();
+        assert_eq!(config.overrides[0].path, "/tmp/we\"ird\\**");
+    }
+
+    #[test]
+    fn a_file_without_a_trailing_newline_still_gains_a_readable_override() {
+        let updated = append_override(
+            "journal_root = \"~/notes\"",
+            &Override {
+                path: "~/work/**".into(),
+                config: "~/work/selfnotes.config".into(),
+            },
+        )
+        .unwrap();
+
+        assert!(updated.contains("~/notes\"\n\n[[overrides]]"), "{updated}");
+        assert_eq!(toml::from_str::<Config>(&updated).unwrap().overrides.len(), 1);
+    }
+
+    #[test]
+    fn check_override_glob_rejects_a_pattern_that_cannot_compile() {
+        assert!(check_override_glob("~/work/**").is_ok());
+
+        let error = check_override_glob("/a/b**").unwrap_err().to_string();
+        assert!(error.contains("/a/b**"), "{error}");
     }
 
     #[test]

@@ -576,6 +576,7 @@ fn print_people(directory: &people::Directory, path: &Path) {
 /// Handle the `config` subcommand.
 fn run_config(action: ConfigAction) -> Result<()> {
     match action {
+        ConfigAction::New { path } => return new_config(path.as_deref()),
         ConfigAction::Open { scope } => return open_config(scope),
         ConfigAction::Validate => return validate_config(),
         ConfigAction::Path => {
@@ -985,6 +986,98 @@ fn check_override(over: &config::Override, is_local: bool, source: &str, cwd: &P
             problems.warn(source, message);
         }
     }
+}
+
+/// Handle `config new`: write a config file in the current directory and register it in the global config as a
+/// path-scoped override.
+///
+/// Both halves are needed for the file to have any effect: overrides declared anywhere but the global config are
+/// ignored. The glob defaults to the current directory and everything under it, which is what a config sitting at the
+/// root of the tree it configures wants; `--path` covers the case where it sits somewhere else.
+///
+/// Re-running is safe. An existing config file is left as written, and an override already pointing at it is reported
+/// rather than duplicated.
+fn new_config(glob: Option<&str>) -> Result<()> {
+    let cwd = std::env::current_dir()?;
+    let target = cwd.join(config::OVERRIDE_CONFIG_NAME);
+    let glob = glob.map_or_else(|| config::override_glob_for(&cwd), str::to_owned);
+
+    // Reject an unusable glob before writing anything, rather than leaving behind a config file no override selects.
+    config::check_override_glob(&glob)?;
+
+    if target.exists() {
+        println!("Kept {} (already there)", target.display());
+    } else {
+        std::fs::write(&target, config::OVERRIDE_CONFIG_TEMPLATE)
+            .with_context(|| format!("writing config file {}", target.display()))?;
+        println!("Created {}", target.display());
+    }
+
+    register_override(&target, &glob)?;
+
+    // A glob that does not cover the directory the config was written in is legitimate, but it is also the usual way
+    // a `--path` typo shows up, so say so rather than leaving it to be discovered later.
+    let entry = config::Override {
+        path: glob.clone(),
+        config: target.display().to_string(),
+    };
+    if !config::override_matches(&entry, &cwd)? {
+        println!(
+            "Note: `{glob}` does not match {}, so this config does not apply here.",
+            cwd.display()
+        );
+    }
+
+    Ok(())
+}
+
+/// Add an `[[overrides]]` entry for `target` to the global config, unless one already points at it.
+fn register_override(target: &Path, glob: &str) -> Result<()> {
+    let global_path = config::global_config_path().context("could not determine a config directory")?;
+    let text = if global_path.exists() {
+        std::fs::read_to_string(&global_path)
+            .with_context(|| format!("reading config file {}", global_path.display()))?
+    } else {
+        String::new()
+    };
+
+    let global: Config =
+        toml::from_str(&text).with_context(|| format!("parsing config file {}", global_path.display()))?;
+
+    if let Some(existing) = global
+        .overrides
+        .iter()
+        .find(|over| config::expand_tilde(&over.config) == target)
+    {
+        if existing.path == glob {
+            println!("Already registered in {} for `{glob}`", global_path.display());
+        } else {
+            println!(
+                "Already registered in {} for `{}`; edit that entry to use `{glob}`",
+                global_path.display(),
+                existing.path
+            );
+        }
+
+        return Ok(());
+    }
+
+    let updated = config::append_override(
+        &text,
+        &config::Override {
+            path: glob.to_owned(),
+            config: target.display().to_string(),
+        },
+    )?;
+
+    if let Some(parent) = global_path.parent() {
+        std::fs::create_dir_all(parent).with_context(|| format!("creating config directory {}", parent.display()))?;
+    }
+
+    std::fs::write(&global_path, updated).with_context(|| format!("writing config {}", global_path.display()))?;
+    println!("Registered in {} for `{glob}`", global_path.display());
+
+    Ok(())
 }
 
 /// Open the global or local config file in the editor, creating it if it does not exist.

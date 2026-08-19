@@ -77,6 +77,8 @@ selfnotes lsp                  # serve `@mention` completion over LSP (started b
 
 selfnotes config path                # show config locations and effective values
 selfnotes config validate            # check the effective config for problems
+selfnotes config new                 # create a config here, scoped to this directory and everything under it
+selfnotes config new --path '~/Affluences/**'  # scope it to another tree instead
 selfnotes config open                # pick global or local interactively, then open it
 selfnotes config open <local|global> # open the local config directly (or `global`)
 selfnotes config get journal-root
@@ -357,7 +359,7 @@ journal_root = "~/work/journal"
 people_file = "~/work/people.toml"
 ```
 
-It can also come from a [path-scoped override](#path-scoped-overrides), which is worth the extra indirection only when the work tree has no `.selfnotes.toml` of its own. That takes two files, and the `[[overrides]]` entry has to live in the **global** config, since overrides declared in a local config are ignored:
+It can also come from a [path-scoped override](#path-scoped-overrides), which is worth the extra indirection only when the work tree has no `.selfnotes.toml` of its own. That takes two files, and the `[[overrides]]` entry has to live in the **global** config, since overrides declared in a local config are ignored (`selfnotes config new` writes both for you):
 
 ```toml
 # ~/.config/selfnotes/config.toml
@@ -434,7 +436,36 @@ path = "/Affluences/**"
 config = "/Affluences/afl-notes/selfnotes.config"
 ```
 
-A leading `~` is expanded in both `path` and `config`, and `**` matches across directory separators. Overrides are applied in declaration order, and a referenced file that does not exist is skipped.
+A leading `~` is expanded in both `path` and `config`, and `**` matches across directory separators. A trailing `/**` also matches the base directory itself, so `/Affluences/**` covers `/Affluences` as well as everything under it. Overrides are applied in declaration order, and a referenced file that does not exist is skipped.
+
+#### Creating one
+
+`selfnotes config new` writes both halves at once. Run it in the directory the config is for:
+
+```
+cd ~/Affluences/afl-notes
+selfnotes config new
+```
+
+That creates `selfnotes.config` in the current directory (with a commented starting point inside) and appends the matching `[[overrides]]` entry to the global config, since an override declared anywhere else is ignored. The glob defaults to the current directory and everything under it:
+
+```toml
+# ~/.config/selfnotes/config.toml, appended
+[[overrides]]
+path = "/Users/you/Affluences/afl-notes/**"
+config = "/Users/you/Affluences/afl-notes/selfnotes.config"
+```
+
+`--path` (`-p`) scopes it somewhere else, which is what you want when the config file lives inside the tree it configures rather than at its root:
+
+```
+cd ~/Affluences/afl-notes
+selfnotes config new --path '~/Affluences/**'
+```
+
+The global config is edited as text rather than rewritten from a parsed config, so its comments, key order and formatting survive. Re-running the command changes nothing it has already done: an existing `selfnotes.config` is left as written, and an override already pointing at it is reported instead of duplicated. To repoint an existing entry at a different glob, edit it in the global config.
+
+The file name is `selfnotes.config` rather than `.selfnotes.toml` on purpose: the local layer picks the latter up on its own, and a file arriving through both layers would make the override look like it does nothing.
 
 ### Example
 
