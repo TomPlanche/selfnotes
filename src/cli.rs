@@ -181,12 +181,12 @@ pub enum ConfigAction {
     },
     /// Print a single configuration value.
     Get {
-        /// One of: journal-root, format, editor, cursor-format, hash-tag-min-len, people-file.
+        /// One of: journal-root, format, editor, cursor-format, space-replacement, hash-tag-min-len, people-file.
         key: String,
     },
     /// Set a value in the global configuration.
     Set {
-        /// One of: journal-root, format, editor, cursor-format, hash-tag-min-len, people-file.
+        /// One of: journal-root, format, editor, cursor-format, space-replacement, hash-tag-min-len, people-file.
         key: String,
         /// The value to store.
         value: String,

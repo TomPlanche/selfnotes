@@ -42,6 +42,7 @@ selfnotes journal -d tomorrow         # tomorrow's entry, ready for notes
 selfnotes new                    # pick a folder, then enter a name (interactive)
 selfnotes new ticket             # skip the folder picker, prompt for a name
 selfnotes new ticket login-bug   # pass both directly
+selfnotes new ticket "login bug" # a spaced name (see `space_replacement`)
 selfnotes new ticket login-bug --no-open
 
 selfnotes list                  # list recent entries, newest first
@@ -85,6 +86,7 @@ selfnotes config set journal-root ~/notes
 selfnotes config set format md
 selfnotes config set editor "zed"
 selfnotes config set cursor-format "{path}:{line}:{column}"
+selfnotes config set space-replacement "-"   # file "login bug" as login-bug.md
 selfnotes config set people-file ~/work/people.toml
 selfnotes config set hash-tag-min-len 7   # tune the git-hash-vs-tag threshold
 ```
@@ -422,7 +424,7 @@ Configuration is merged from up to three layers, each overriding the previous:
 - Overrides: path-scoped config files declared in the global config (see below).
 - Local: the nearest `.selfnotes.toml` found by walking up from the current directory.
 
-Scalar keys (`journal_root`, `format`, `editor`, `cursor_format`, `hash_tag_min_len`, `people_file`) and the `[journal]` section are merged field by field. `default_tags` (top level and per source) is replaced by a later layer that sets a non-empty list. Each `[[custom_folders]]` entry is matched by `name`: a later entry with the same name replaces the earlier one, and any new names are appended.
+Scalar keys (`journal_root`, `format`, `editor`, `cursor_format`, `space_replacement`, `hash_tag_min_len`, `people_file`) and the `[journal]` section are merged field by field. `default_tags` (top level and per source) is replaced by a later layer that sets a non-empty list. Each `[[custom_folders]]` entry is matched by `name`: a later entry with the same name replaces the earlier one, and any new names are appended.
 
 `selfnotes config new` writes the local layer for you: a `.selfnotes.toml` in the current directory, holding a commented starting point rather than an empty file. Nothing has to be registered anywhere, since a run finds it by walking up. Dropping it at the root of a tree therefore configures that whole tree, and only the nearest one applies: a copy in a subdirectory replaces its ancestor rather than adding to it. An existing file is never overwritten, so re-running the command changes nothing.
 
@@ -462,6 +464,8 @@ format = "md"
 editor = "nvim"
 # Tags seeded into every new note's frontmatter.
 default_tags = ["me"]
+# What spaces in a `selfnotes new` name become in the file name (omit to keep them).
+space_replacement = "-"
 # All-hex inline #tokens this long or longer are treated as git hashes, not tags (default 6; 0 disables).
 hash_tag_min_len = 6
 # Roster of people completed after an `@` (defaults to people.toml beside this file).
@@ -488,19 +492,35 @@ default_tags = ["work"]
 [[custom_folders]]
 name = "idea"
 # path omitted -> entries land in <journal-root>/idea/
+# Optional per-folder override of the top-level space_replacement.
+space_replacement = "_"
 ```
 
 Running `selfnotes new` with no folder shows a picker of the configured folder names (via `dialoguer`), then prompts for the entry name.
 
+### Spaces in entry names
+
+Entry names are allowed to contain spaces, and by default the file keeps them: `selfnotes new ticket "login bug"` writes `login bug.md`. Set `space_replacement` to file those names under a separator instead.
+
+```toml
+space_replacement = "-"
+```
+
+With that set, `selfnotes new ticket "login bug"` writes `login-bug.md`. Only the file name changes. The template still receives the name exactly as typed, so the entry opens on `# login bug` rather than on its file name. A folder can override the top-level value with its own `space_replacement`, and the key is unset by default, which leaves every name as typed.
+
+Runs of whitespace collapse into a single replacement and any leading or trailing whitespace is dropped, so `"  login   bug "` and `"login bug"` both land at `login-bug.md`. The empty string is a meaningful value: `space_replacement = ""` files that entry as `loginbug.md`.
+
+A name that already contains no spaces is untouched, so switching the key on does not rename or shadow anything you created before. Existing files are never renamed either: the key only shapes names at creation time, and an entry whose file already exists is reopened rather than rewritten.
+
 ### Validating the configuration
 
-`selfnotes config validate` checks every config file that contributes to the effective configuration and prints a verdict (`valid` / `INVALID`) per file, with each problem attributed to the file it came from. It exits non-zero when any file is invalid, so it fits in scripts and pre-flight checks. The blocking problems are: an unset `journal_root`, a custom folder whose directory would escape the journal root (via its `path` or a name containing `..`), a folder `name` containing a path separator (`/` or `\`), and a referenced `template_file` (journal or folder) that does not exist. A `field_order` entry naming a field that no field declares is reported as a warning rather than an error.
+`selfnotes config validate` checks every config file that contributes to the effective configuration and prints a verdict (`valid` / `INVALID`) per file, with each problem attributed to the file it came from. It exits non-zero when any file is invalid, so it fits in scripts and pre-flight checks. The blocking problems are: an unset `journal_root`, a custom folder whose directory would escape the journal root (via its `path` or a name containing `..`), a folder `name` containing a path separator (`/` or `\`), a `space_replacement` (top level or per folder) containing a path separator, and a referenced `template_file` (journal or folder) that does not exist. A `field_order` entry naming a field that no field declares is reported as a warning rather than an error.
 
 Each file is judged on what actually takes effect: a folder or journal template shadowed by a higher-priority layer is not re-checked, and folder directories are resolved against the effective journal root even when a given file does not set its own root. The set of files checked mirrors what loading merges: the global config, each matching override's referenced config, and the nearest local `.selfnotes.toml`.
 
 The command also inspects the `[[overrides]]` declared in each config file. An invalid glob is an error, and every glob of an entry is checked even once one of them has matched, so a typo cannot hide behind a sibling that works. An entry declaring no glob at all is reported as a warning, since it never applies. For an override in the global config, it reports whether the glob matches the current directory and checks the referenced config file exists (an error when the override matches here, a warning otherwise); the referenced config's own folders and templates are validated as one of the checked files. An override declared in a local config is reported as ignored, since only the global config's overrides are applied, along with whether its glob would even have matched, which is the usual reason such an override looks like it does nothing.
 
-Entry names are held to the same rule at creation time: a `name` containing a path separator, `..`, or an absolute path is rejected before anything is written, so an entry can never be created outside the journal root.
+Entry names are held to the same rule at creation time: a `name` containing a path separator, `..`, or an absolute path is rejected before anything is written, so an entry can never be created outside the journal root. The name is checked again after `space_replacement` has been applied, so a replacement that would push the entry out of its folder fails there too rather than at the write.
 
 ### Custom folder fields
 

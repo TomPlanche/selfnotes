@@ -594,14 +594,25 @@ fn run_config(action: ConfigAction) -> Result<()> {
             println!();
             println!("effective values:");
             println!(
-                "  journal-root = {}",
+                "  journal-root      = {}",
                 merged.journal_root.as_deref().unwrap_or("<unset>")
             );
-            println!("  format       = {}", merged.journal_format());
-            println!("  editor       = {}", merged.editor.as_deref().unwrap_or("<unset>"));
-            println!("  cursor-format = {}", merged.cursor_format());
+            println!("  format            = {}", merged.journal_format());
             println!(
-                "  people-file  = {}",
+                "  editor            = {}",
+                merged.editor.as_deref().unwrap_or("<unset>")
+            );
+            println!("  cursor-format     = {}", merged.cursor_format());
+            // Quoted, since the empty string is a meaningful value here and would otherwise read as unset.
+            println!(
+                "  space-replacement = {}",
+                merged
+                    .space_replacement
+                    .as_deref()
+                    .map_or_else(|| "<unset>".to_owned(), |value| format!("\"{value}\""))
+            );
+            println!(
+                "  people-file       = {}",
                 people::path(&merged).map_or_else(|| "<unavailable>".to_owned(), |path| path.display().to_string())
             );
         },
@@ -613,6 +624,7 @@ fn run_config(action: ConfigAction) -> Result<()> {
                 "format" => Some(config.journal_format().to_string()),
                 "editor" => config.editor,
                 "cursor-format" => Some(config.cursor_format().to_string()),
+                "space-replacement" => config.space_replacement,
                 "hash-tag-min-len" => Some(config.hash_tag_min_len().to_string()),
                 "people-file" => people::path(&config).map(|path| path.display().to_string()),
                 other => bail!("unknown config key `{other}`"),
@@ -631,6 +643,7 @@ fn run_config(action: ConfigAction) -> Result<()> {
                 "format" => config.format = Some(value),
                 "editor" => config.editor = Some(value),
                 "cursor-format" => config.cursor_format = Some(value),
+                "space-replacement" => config.space_replacement = Some(value),
                 "people-file" => config.people_file = Some(value),
                 "hash-tag-min-len" => {
                     config.hash_tag_min_len = Some(
@@ -739,6 +752,14 @@ fn validate_config() -> Result<()> {
 
     for (index, layer) in layers.iter().enumerate() {
         let later = &layers[index + 1..];
+
+        // Checked wherever it is written, shadowed or not: a separator here is a mistake in this file either way.
+        check_space_replacement(
+            layer.config.space_replacement.as_deref(),
+            "space_replacement",
+            &layer.label,
+            &mut problems,
+        );
 
         // Only the highest-priority layer that sets a journal template is effective.
         let template_shadowed = later.iter().any(|layer| {
@@ -924,6 +945,13 @@ fn check_folder(folder: &FolderConfig, root: Option<&Path>, source: &str, proble
         problems.error(source, format!("folder `{name}`: template file not found: {template}"));
     }
 
+    check_space_replacement(
+        folder.space_replacement.as_deref(),
+        &format!("folder `{name}`: space_replacement"),
+        source,
+        problems,
+    );
+
     for field in &folder.field_order {
         if !folder.fields.iter().any(|declared| &declared.name == field) {
             problems.warn(
@@ -931,6 +959,19 @@ fn check_folder(folder: &FolderConfig, root: Option<&Path>, source: &str, proble
                 format!("folder `{name}`: field_order references unknown field `{field}` (ignored)"),
             );
         }
+    }
+}
+
+/// Check a `space_replacement`, described by `label`, cannot push an entry out of its folder.
+///
+/// The value is substituted into the file name, so a path separator in it turns `selfnotes new ticket "login bug"`
+/// into a write one directory over. Creation rejects that, but only once a spaced name has been typed, so report the
+/// value itself here.
+fn check_space_replacement(value: Option<&str>, label: &str, source: &str, problems: &mut Problems) {
+    if let Some(value) = value
+        && (value.contains('/') || value.contains('\\'))
+    {
+        problems.error(source, format!("{label}: must not contain a path separator"));
     }
 }
 

@@ -62,6 +62,9 @@ pub fn create_journal(config: &Config, date: NaiveDate) -> Result<Entry> {
 ///
 /// `fields` are the resolved custom-field values, exposed to the template as
 /// `{{<folder-name>.<field>}}`.
+///
+/// A configured `space_replacement` only shapes the file name. The template still renders `{{name}}` as typed, so an
+/// entry filed as `login-bug.md` keeps `# login bug` as its heading.
 pub fn create_folder_entry(
     config: &Config,
     folder: &FolderConfig,
@@ -72,9 +75,15 @@ pub fn create_folder_entry(
     // before prompting the user; both are cheap and idempotent.
     validate_entry_name(name)?;
 
+    let stem = replace_spaces(name, config.folder_space_replacement(folder));
+    // The replacement is arbitrary text, so it can reintroduce a separator or leave nothing behind. Hold the
+    // substituted stem to the same rule as the name that was typed.
+    validate_entry_name(&stem)
+        .with_context(|| format!("`space_replacement` turned entry name `{name}` into `{stem}`"))?;
+
     let dir = folder_dir(config, folder)?;
-    let file_name = format!("{}.{}", name, config.folder_format(folder));
-    // With `dir` inside the root and `name` a single plain component, this stays under the root.
+    let file_name = format!("{stem}.{}", config.folder_format(folder));
+    // With `dir` inside the root and `stem` a single plain component, this stays under the root.
     let path = dir.join(file_name);
 
     let ctx = Context::now().with_name(name).with_fields(folder.name.as_str(), fields);
@@ -123,6 +132,19 @@ pub fn validate_entry_name(name: &str) -> Result<()> {
         (Some(Component::Normal(_)), None) => Ok(()),
         _ => bail!("invalid entry name `{name}`: must not be empty, `.`, `..`, or an absolute path"),
     }
+}
+
+/// Build a file-name stem from `name`, joining its words with `replacement`.
+///
+/// `None` keeps the name exactly as typed. Splitting on whitespace rather than substituting character by character
+/// collapses runs (`a  b` yields one separator, not two) and drops any leading or trailing whitespace, so the file
+/// name never records how the name happened to be spaced. An empty `replacement` therefore removes the spaces
+/// outright.
+fn replace_spaces(name: &str, replacement: Option<&str>) -> String {
+    replacement.map_or_else(
+        || name.to_owned(),
+        |replacement| name.split_whitespace().collect::<Vec<_>>().join(replacement),
+    )
 }
 
 /// Ensure `path` stays within `root` after lexically resolving any `.`/`..` components.
@@ -296,6 +318,112 @@ mod tests {
         for name in ["ticket", "my-note", "2026-07-16", "note.with.dots"] {
             assert!(validate_entry_name(name).is_ok(), "expected `{name}` to be accepted");
         }
+    }
+
+    #[test]
+    fn no_replacement_keeps_the_name_as_typed() {
+        assert_eq!(replace_spaces("login bug", None), "login bug");
+    }
+
+    #[test]
+    fn replacement_joins_the_words() {
+        assert_eq!(replace_spaces("login bug", Some("-")), "login-bug");
+        assert_eq!(replace_spaces("login bug", Some("_")), "login_bug");
+        assert_eq!(replace_spaces("login bug", Some("")), "loginbug");
+    }
+
+    #[test]
+    fn replacement_collapses_runs_and_trims() {
+        assert_eq!(replace_spaces("  login   bug \t fix ", Some("-")), "login-bug-fix");
+    }
+
+    #[test]
+    fn replacement_leaves_an_unspaced_name_alone() {
+        assert_eq!(replace_spaces("login-bug", Some("-")), "login-bug");
+    }
+
+    /// A journal root that is deleted when the test ends.
+    struct TempRoot(PathBuf);
+
+    impl TempRoot {
+        fn new(label: &str) -> Self {
+            let stamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let root = std::env::temp_dir().join(format!("selfnotes-{label}-{}-{stamp}", std::process::id()));
+
+            std::fs::create_dir_all(&root).unwrap();
+
+            Self(root)
+        }
+
+        /// A config rooted here, with `space_replacement` set to `replacement`.
+        fn config(&self, replacement: Option<&str>) -> Config {
+            Config {
+                journal_root: Some(self.0.display().to_string()),
+                space_replacement: replacement.map(str::to_owned),
+                ..Config::default()
+            }
+        }
+    }
+
+    impl Drop for TempRoot {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn ticket_folder() -> FolderConfig {
+        FolderConfig {
+            name: "ticket".into(),
+            path: Some("tickets".into()),
+            ..FolderConfig::default()
+        }
+    }
+
+    #[test]
+    fn replacement_shapes_the_file_name_but_not_the_title() {
+        let root = TempRoot::new("space-replacement");
+        let config = root.config(Some("-"));
+
+        let entry = create_folder_entry(&config, &ticket_folder(), "login bug", Vec::new()).unwrap();
+
+        assert_eq!(entry.path, root.0.join("tickets/login-bug.md"));
+        // The name reaches the template as typed, so the entry still reads as a sentence.
+        assert!(std::fs::read_to_string(&entry.path).unwrap().contains("# login bug"));
+    }
+
+    #[test]
+    fn folder_replacement_overrides_the_top_level_one() {
+        let root = TempRoot::new("space-replacement-folder");
+        let config = root.config(Some("-"));
+        let folder = FolderConfig {
+            space_replacement: Some("_".into()),
+            ..ticket_folder()
+        };
+
+        let entry = create_folder_entry(&config, &folder, "login bug", Vec::new()).unwrap();
+
+        assert_eq!(entry.path, root.0.join("tickets/login_bug.md"));
+    }
+
+    #[test]
+    fn unset_replacement_files_the_name_verbatim() {
+        let root = TempRoot::new("space-replacement-unset");
+        let config = root.config(None);
+
+        let entry = create_folder_entry(&config, &ticket_folder(), "login bug", Vec::new()).unwrap();
+
+        assert_eq!(entry.path, root.0.join("tickets/login bug.md"));
+    }
+
+    #[test]
+    fn a_replacement_that_escapes_the_folder_is_rejected() {
+        let root = TempRoot::new("space-replacement-escape");
+        let config = root.config(Some("/../"));
+
+        assert!(create_folder_entry(&config, &ticket_folder(), "login bug", Vec::new()).is_err());
     }
 
     #[test]

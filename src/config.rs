@@ -30,6 +30,9 @@ pub const LOCAL_CONFIG_TEMPLATE: &str = "\
 # journal_root = \"~/work/journal\"
 # people_file  = \"~/work/people.toml\"
 # default_tags = [\"work\"]
+# What spaces in a `selfnotes new` name become in the file name, so \"login bug\"
+# is filed as `login-bug.md`. The note still reads `# login bug`.
+# space_replacement = \"-\"
 
 # [journal]
 # template_file = \"~/work/templates/journal.md\"
@@ -44,6 +47,8 @@ pub const LOCAL_CONFIG_TEMPLATE: &str = "\
 # template_file = \"~/work/templates/ticket.md\"
 # # Added to the `default_tags` above, for this folder's entries only.
 # default_tags = [\"ticket\"]
+# # Overrides the `space_replacement` above, for this folder only.
+# space_replacement = \"_\"
 
 # Values prompted for when the entry is created, and read by its template as
 # `{{ticket.priority}}` and `{{ticket.assignee}}`.
@@ -88,6 +93,10 @@ pub struct Config {
     /// whitespace into arguments.
     /// Defaults to `{path}:{line}:{column}` (zed / VS Code style).
     pub cursor_format: Option<String>,
+    /// String that whitespace in a `selfnotes new` entry name is replaced with to build the file name. Unset leaves
+    /// the name as typed; `""` removes the whitespace outright. Only the file name is affected, never the `{{name}}`
+    /// the template renders.
+    pub space_replacement: Option<String>,
     /// Tags seeded into the frontmatter of every new note, on top of any per-source defaults.
     #[serde(default)]
     pub default_tags: Vec<String>,
@@ -213,6 +222,8 @@ pub struct FolderConfig {
     pub template_file: Option<String>,
     /// Extension override for this folder's entries.
     pub format: Option<String>,
+    /// Override of the top-level `space_replacement` for this folder's entry names.
+    pub space_replacement: Option<String>,
     /// Tags seeded into the frontmatter of new entries in this folder, in addition to the global `default_tags`.
     #[serde(default)]
     pub default_tags: Vec<String>,
@@ -279,6 +290,10 @@ impl Config {
 
         if other.cursor_format.is_some() {
             self.cursor_format = other.cursor_format;
+        }
+
+        if other.space_replacement.is_some() {
+            self.space_replacement = other.space_replacement;
         }
 
         if !other.default_tags.is_empty() {
@@ -380,6 +395,17 @@ impl Config {
     /// Effective editor cursor-position format.
     pub fn cursor_format(&self) -> &str {
         self.cursor_format.as_deref().unwrap_or(DEFAULT_CURSOR_FORMAT)
+    }
+
+    /// Effective whitespace replacement for entry names created in `folder`, or `None` when names are kept as typed.
+    ///
+    /// An empty string is a meaningful value (it joins the words with nothing), so it is returned as `Some("")` rather
+    /// than falling back to the top level.
+    pub fn folder_space_replacement<'a>(&'a self, folder: &'a FolderConfig) -> Option<&'a str> {
+        folder
+            .space_replacement
+            .as_deref()
+            .or(self.space_replacement.as_deref())
     }
 
     /// Effective minimum length for treating an all-hex inline `#token` as a git hash rather than a tag.
