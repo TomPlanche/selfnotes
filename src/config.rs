@@ -51,6 +51,15 @@ pub const LOCAL_CONFIG_TEMPLATE: &str = "\
 # # Overrides the `space_replacement` above, for this folder only.
 # space_replacement = \"_\"
 
+# The ladder `selfnotes status` and `selfnotes next` move an entry along, in order.
+# Replaces the top-level `statuses` rather than adding to it.
+
+# statuses = [\"backlog\", \"todo\", \"doing\", \"blocked\", \"staging\", \"prod\"]
+# # What a new entry starts in; defaults to the first status above.
+# default_status = \"backlog\"
+# # Statuses that close an entry, which `selfnotes board` hides unless given --all.
+# terminal_statuses = [\"prod\"]
+
 # Values prompted for when the entry is created, and read by its template as
 # `{{ticket.priority}}` and `{{ticket.assignee}}`.
 
@@ -108,6 +117,15 @@ pub struct Config {
     /// resolves to a `people.toml` beside the global config; a path-scoped override can point at a different roster
     /// per project.
     pub people_file: Option<String>,
+    /// Statuses a note's frontmatter `status` may take, in workflow order, for every source that declares none of its
+    /// own. Empty means statuses are not tracked. See [`crate::status`].
+    #[serde(default)]
+    pub statuses: Vec<String>,
+    /// Status new notes start in. Unset (or not one of `statuses`) means the first declared status.
+    pub default_status: Option<String>,
+    /// Statuses that close a note, which `selfnotes board` leaves out unless asked for everything.
+    #[serde(default)]
+    pub terminal_statuses: Vec<String>,
     /// Journal-specific settings.
     pub journal: Option<JournalConfig>,
     /// User-defined folders, selected by name from the command line.
@@ -250,6 +268,18 @@ pub struct FolderConfig {
     /// Tags seeded into the frontmatter of new entries in this folder, in addition to the global `default_tags`.
     #[serde(default)]
     pub default_tags: Vec<String>,
+    /// Statuses this folder's entries move through, in workflow order.
+    ///
+    /// Unlike `default_tags`, this *replaces* the top-level `statuses` rather than adding to it: a workflow is an
+    /// ordered whole, and an ideas folder ending at `dropped` has nothing to gain from also inheriting a deployment
+    /// ladder's `staging` and `prod`.
+    #[serde(default)]
+    pub statuses: Vec<String>,
+    /// Status new entries in this folder start in, overriding the top-level `default_status`.
+    pub default_status: Option<String>,
+    /// Statuses that close one of this folder's entries, overriding the top-level `terminal_statuses`.
+    #[serde(default)]
+    pub terminal_statuses: Vec<String>,
     /// Custom fields prompted for when creating an entry and exposed to the template as `{{<folder-name>.<field>}}`.
     #[serde(default)]
     pub fields: Vec<TemplateField>,
@@ -338,6 +368,18 @@ impl Config {
 
         if other.people_file.is_some() {
             self.people_file = other.people_file;
+        }
+
+        if !other.statuses.is_empty() {
+            self.statuses = other.statuses;
+        }
+
+        if other.default_status.is_some() {
+            self.default_status = other.default_status;
+        }
+
+        if !other.terminal_statuses.is_empty() {
+            self.terminal_statuses = other.terminal_statuses;
         }
 
         if let Some(other_journal) = other.journal {
@@ -502,6 +544,33 @@ impl Config {
         extend_unique(&mut tags, &folder.default_tags);
 
         tags
+    }
+
+    /// Statuses `folder`'s entries move through: its own workflow, or the top-level one when it declares none.
+    ///
+    /// Each of the three status keys falls back independently, so a folder can rename the ladder without restating
+    /// which of its steps is the default. A combination that does not line up (a `default_status` outside the folder's
+    /// own `statuses`, say) is reported by `selfnotes config validate`.
+    pub fn folder_statuses<'a>(&'a self, folder: &'a FolderConfig) -> &'a [String] {
+        if folder.statuses.is_empty() {
+            &self.statuses
+        } else {
+            &folder.statuses
+        }
+    }
+
+    /// Status new entries in `folder` start in, before it is checked against the effective workflow.
+    pub fn folder_default_status<'a>(&'a self, folder: &'a FolderConfig) -> Option<&'a str> {
+        folder.default_status.as_deref().or(self.default_status.as_deref())
+    }
+
+    /// Statuses that close one of `folder`'s entries.
+    pub fn folder_terminal_statuses<'a>(&'a self, folder: &'a FolderConfig) -> &'a [String] {
+        if folder.terminal_statuses.is_empty() {
+            &self.terminal_statuses
+        } else {
+            &folder.terminal_statuses
+        }
     }
 }
 
@@ -738,6 +807,77 @@ mod tests {
             }],
             ..Config::default()
         }
+    }
+
+    /// A config with a top-level workflow and one folder, so the fallbacks can be exercised.
+    fn config_with_statuses(folder: FolderConfig) -> Config {
+        Config {
+            statuses: vec!["backlog".into(), "todo".into(), "done".into()],
+            default_status: Some("todo".into()),
+            terminal_statuses: vec!["done".into()],
+            custom_folders: vec![folder],
+            ..Config::default()
+        }
+    }
+
+    #[test]
+    fn a_folder_without_statuses_runs_on_the_top_level_workflow() {
+        let config = config_with_statuses(FolderConfig {
+            name: "idea".into(),
+            ..FolderConfig::default()
+        });
+        let folder = config.folder("idea").unwrap();
+
+        assert_eq!(config.folder_statuses(folder), ["backlog", "todo", "done"]);
+        assert_eq!(config.folder_default_status(folder), Some("todo"));
+        assert_eq!(config.folder_terminal_statuses(folder), ["done"]);
+    }
+
+    #[test]
+    fn a_folder_replaces_the_workflow_rather_than_extending_it() {
+        let config = config_with_statuses(FolderConfig {
+            name: "idea".into(),
+            statuses: vec!["open".into(), "shipped".into()],
+            ..FolderConfig::default()
+        });
+        let folder = config.folder("idea").unwrap();
+
+        assert_eq!(config.folder_statuses(folder), ["open", "shipped"]);
+        // The other two keys fall back on their own, so a renamed ladder need not restate them.
+        assert_eq!(config.folder_default_status(folder), Some("todo"));
+        assert_eq!(config.folder_terminal_statuses(folder), ["done"]);
+    }
+
+    #[test]
+    fn a_folder_overrides_the_default_and_terminal_statuses_on_their_own() {
+        let config = config_with_statuses(FolderConfig {
+            name: "idea".into(),
+            default_status: Some("backlog".into()),
+            terminal_statuses: vec!["dropped".into()],
+            ..FolderConfig::default()
+        });
+        let folder = config.folder("idea").unwrap();
+
+        assert_eq!(config.folder_default_status(folder), Some("backlog"));
+        assert_eq!(config.folder_terminal_statuses(folder), ["dropped"]);
+    }
+
+    #[test]
+    fn statuses_overlay_wholesale_rather_than_merging() {
+        let mut config = Config {
+            statuses: vec!["backlog".into(), "todo".into()],
+            terminal_statuses: vec!["todo".into()],
+            ..Config::default()
+        };
+
+        config.overlay(Config {
+            statuses: vec!["open".into(), "closed".into()],
+            ..Config::default()
+        });
+
+        assert_eq!(config.statuses, ["open", "closed"]);
+        // An empty list in the higher layer says nothing, so the lower one stands.
+        assert_eq!(config.terminal_statuses, ["todo"]);
     }
 
     /// A config whose folders are named by `names`, each stamped with the layer it came from.

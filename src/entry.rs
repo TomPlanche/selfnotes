@@ -7,6 +7,7 @@ use chrono::{Datelike, NaiveDate};
 
 use crate::carryover;
 use crate::config::{self, Config, FolderConfig};
+use crate::status::{self, Workflow};
 use crate::template::{self, Context, Cursor};
 
 /// Outcome of an entry request, so callers can report accurately.
@@ -55,7 +56,8 @@ pub fn create_journal(config: &Config, date: NaiveDate) -> Result<Entry> {
         .and_then(|journal| journal.template_file.as_deref());
     let default = "# {{date}}\n\n";
 
-    write_entry(&path, template, default, &ctx, &config.journal_default_tags())
+    // No status: the journal does not track one (see `Workflow::for_source`).
+    write_entry(&path, template, default, &ctx, &config.journal_default_tags(), None)
 }
 
 /// Create an entry in a custom folder: `<root>/<folder.path>/<name>.<format>`.
@@ -89,8 +91,16 @@ pub fn create_folder_entry(
     let ctx = Context::now().with_name(name).with_fields(folder.name.as_str(), fields);
     let template = folder.template_file.as_deref();
     let default = "# {{name}}\n\n_Created {{datetime}}_\n\n";
+    let status = Workflow::for_folder(config, folder).default_status();
 
-    write_entry(&path, template, default, &ctx, &config.folder_default_tags(folder))
+    write_entry(
+        &path,
+        template,
+        default,
+        &ctx,
+        &config.folder_default_tags(folder),
+        status,
+    )
 }
 
 /// Resolve the directory a folder's entries live in: `<root>/<folder.path-or-name>`.
@@ -193,14 +203,15 @@ fn lexical_normalize(path: &Path) -> PathBuf {
 /// Write an entry file if it does not already exist.
 ///
 /// `template_file` is an optional path to a template; when absent, `default` is rendered instead. Both go through
-/// placeholder substitution, and any `default_tags` are seeded into the note's frontmatter before rendering (so a
-/// `{{cursor}}` position stays correct).
+/// placeholder substitution, and any `default_tags` and `default_status` are seeded into the note's frontmatter before
+/// rendering (so a `{{cursor}}` position stays correct). A template that sets its own `status` keeps it.
 fn write_entry(
     path: &Path,
     template_file: Option<&str>,
     default: &str,
     ctx: &Context,
     default_tags: &[String],
+    default_status: Option<&str>,
 ) -> Result<Entry> {
     if path.exists() {
         return Ok(Entry {
@@ -225,6 +236,7 @@ fn write_entry(
     };
 
     let raw = crate::notes::ensure_frontmatter_tags(&raw, default_tags);
+    let raw = status::seed(&raw, default_status);
     let rendered = template::render(&raw, ctx);
 
     std::fs::write(path, &rendered.content).with_context(|| format!("writing entry {}", path.display()))?;

@@ -1,6 +1,7 @@
 //! `selfnotes`: a CLI that manages a journal-style notes filesystem.
 //! `selfnotes -h` for full usage information.
 
+mod board;
 mod carryover;
 mod cli;
 mod config;
@@ -12,6 +13,7 @@ mod lsp;
 mod notes;
 mod people;
 mod search;
+mod status;
 mod template;
 
 use std::path::Path;
@@ -26,6 +28,7 @@ use cli::{Cli, Command, ConfigAction, ConfigScope, ImportFormat, PeopleAction, T
 use config::{Config, FolderConfig};
 use entry::Entry;
 use notes::{Index, IndexedNote};
+use status::Workflow;
 
 fn main() -> Result<()> {
     let args = Cli::parse();
@@ -44,50 +47,15 @@ fn main() -> Result<()> {
             report(&entry);
             maybe_open(&config, &entry, no_open);
         },
-        Command::New { folder, name, no_open } => {
+        Command::New { folder, name, no_open } => run_new(folder, name, no_open)?,
+        Command::List {
+            limit,
+            folder,
+            tags,
+            statuses,
+        } => {
             let config = config::load()?;
-            if config.custom_folders.is_empty() {
-                bail!("no custom folders are configured; add a [[custom_folders]] entry to your config");
-            }
-
-            let folder_config = match folder {
-                Some(folder) => config
-                    .folder(&folder)
-                    .with_context(|| {
-                        format!(
-                            "no folder `{folder}` is configured ({} expected)",
-                            config.folder_names()
-                        )
-                    })?
-                    .clone(),
-                None => select_folder(&config)?,
-            };
-
-            // Validate the target directory (which does not depend on the entry name) before prompting, so a
-            // misconfigured folder fails immediately instead of after the user fills everything in.
-            entry::folder_dir(&config, &folder_config)?;
-
-            let name = match name {
-                Some(name) => name,
-                None => prompt_name()?,
-            };
-            let name = name.trim();
-
-            if name.is_empty() {
-                bail!("entry name cannot be empty");
-            }
-            // Reject a traversal-laden name before prompting for the folder's fields.
-            entry::validate_entry_name(name)?;
-
-            let fields = prompt_fields(&folder_config)?;
-
-            let entry = entry::create_folder_entry(&config, &folder_config, name, fields)?;
-            report(&entry);
-            maybe_open(&config, &entry, no_open);
-        },
-        Command::List { limit, folder, tags } => {
-            let config = config::load()?;
-            let listings = list::recent(&config, folder.as_deref(), limit, &tags)?;
+            let listings = list::recent(&config, folder.as_deref(), limit, &tags, &statuses)?;
 
             print_listings(&config, &listings)?;
         },
@@ -96,6 +64,7 @@ fn main() -> Result<()> {
             limit,
             folder,
             tags,
+            statuses,
             context,
             case_sensitive,
             files,
@@ -107,6 +76,7 @@ fn main() -> Result<()> {
                     text: &query,
                     folder: folder.as_deref(),
                     tags: &tags,
+                    statuses: &statuses,
                     case_sensitive,
                     context,
                     limit,
@@ -121,6 +91,14 @@ fn main() -> Result<()> {
 
             print_tags(&index, sort);
         },
+        Command::Status { name, state, pick } => run_status(&name, state.as_deref(), pick)?,
+        Command::Next { name } => run_next(&name)?,
+        Command::Board {
+            folder,
+            tags,
+            all,
+            limit,
+        } => run_board(folder.as_deref(), &tags, all, limit)?,
         Command::Links { name } => {
             let config = config::load()?;
             let index = notes::build_index(&config, None)?;
@@ -258,6 +236,357 @@ fn print_tags(index: &Index, sort: TagSort) {
     }
 }
 
+/// Handle `new`: create (or reopen) an entry in a custom folder, prompting for whatever was not given.
+fn run_new(folder: Option<String>, name: Option<String>, no_open: bool) -> Result<()> {
+    let config = config::load()?;
+    if config.custom_folders.is_empty() {
+        bail!("no custom folders are configured; add a [[custom_folders]] entry to your config");
+    }
+
+    let folder_config = match folder {
+        Some(folder) => config
+            .folder(&folder)
+            .with_context(|| {
+                format!(
+                    "no folder `{folder}` is configured ({} expected)",
+                    config.folder_names()
+                )
+            })?
+            .clone(),
+        None => select_folder(&config)?,
+    };
+
+    // Validate the target directory (which does not depend on the entry name) before prompting, so a misconfigured
+    // folder fails immediately instead of after the user fills everything in.
+    entry::folder_dir(&config, &folder_config)?;
+
+    let name = match name {
+        Some(name) => name,
+        None => prompt_name()?,
+    };
+    let name = name.trim();
+
+    if name.is_empty() {
+        bail!("entry name cannot be empty");
+    }
+    // Reject a traversal-laden name before prompting for the folder's fields.
+    entry::validate_entry_name(name)?;
+
+    let fields = prompt_fields(&folder_config)?;
+
+    let entry = entry::create_folder_entry(&config, &folder_config, name, fields)?;
+    report(&entry);
+    maybe_open(&config, &entry, no_open);
+
+    Ok(())
+}
+
+/// Handle `status`: report where a note sits in its folder's workflow, or move it somewhere else.
+fn run_status(name: &str, state: Option<&str>, pick: bool) -> Result<()> {
+    let config = config::load()?;
+    let index = notes::build_index(&config, None)?;
+    let note = resolve_target(&index, name)?;
+    let workflow = note_workflow(&config, note)?;
+    let content = read_note(&note.file.path)?;
+    let current = status::read(&content);
+
+    let wanted = match state {
+        Some(state) => Some(state.to_owned()),
+        None if pick => Some(pick_status(&workflow, current.as_deref())?),
+        None => None,
+    };
+
+    let Some(wanted) = wanted else {
+        report_status(&config, note, &workflow, current.as_deref());
+
+        return Ok(());
+    };
+
+    let target = workflow.resolve(&wanted).with_context(|| {
+        format!(
+            "`{wanted}` is not a status of folder `{}` ({} expected)",
+            note.file.source,
+            workflow.names()
+        )
+    })?;
+
+    apply_status(&config, &note.file.path, &content, current.as_deref(), target)
+}
+
+/// Handle `next`: move a note one step along its folder's workflow.
+fn run_next(name: &str) -> Result<()> {
+    let config = config::load()?;
+    let index = notes::build_index(&config, None)?;
+    let note = resolve_target(&index, name)?;
+    let workflow = note_workflow(&config, note)?;
+    let content = read_note(&note.file.path)?;
+    let current = status::read(&content);
+
+    // An untracked note joins the workflow at its start rather than refusing to move.
+    let Some(current) = current.as_deref() else {
+        let first = workflow
+            .default_status()
+            .context("the folder declares no statuses to start from")?;
+
+        return apply_status(&config, &note.file.path, &content, None, first);
+    };
+
+    let resolved = workflow.resolve(current).with_context(|| {
+        format!(
+            "`{current}` is not a status of folder `{}` ({} expected); set one with `selfnotes status`",
+            note.file.source,
+            workflow.names()
+        )
+    })?;
+
+    let Some(next) = workflow.next_after(resolved) else {
+        println!(
+            "{} is already at the end of the workflow (`{resolved}`).",
+            display_path(&config, &note.file.path)
+        );
+
+        return Ok(());
+    };
+
+    apply_status(&config, &note.file.path, &content, Some(current), next)
+}
+
+/// Handle `board`: group every tracked note by the status it carries.
+fn run_board(folder: Option<&str>, tags: &[String], all: bool, limit: usize) -> Result<()> {
+    let config = config::load()?;
+    let board = board::build(&config, folder, tags, all, limit)?;
+
+    print_board(&config, &board)
+}
+
+/// The workflow a note's folder declares, erroring when it declares none.
+///
+/// Statuses are a per-folder opt-in, so this is where "that folder does not do statuses" is said once, with the
+/// configuration change that would make it work.
+fn note_workflow<'a>(config: &'a Config, note: &IndexedNote) -> Result<Workflow<'a>> {
+    let workflow = Workflow::for_source(config, &note.file.source);
+
+    if workflow.is_empty() {
+        let source = &note.file.source;
+
+        if source == notes::JOURNAL_SOURCE {
+            bail!("journal entries do not carry a status; statuses are declared per custom folder");
+        }
+
+        bail!(
+            "folder `{source}` declares no statuses; add `statuses = [...]` to its `[[custom_folders]]` entry to \
+             track them"
+        );
+    }
+
+    Ok(workflow)
+}
+
+/// Resolve a note argument that may be a name (as `links` and `open` take it) or a path to the file itself.
+///
+/// Accepting a path is what lets an editor hand over the buffer it is on, `$ZED_FILE` and the like, without having to
+/// know how the note would be named or worrying that two folders hold the same name.
+fn resolve_target<'a>(index: &'a Index, target: &str) -> Result<&'a IndexedNote> {
+    let path = Path::new(target);
+
+    if !path.is_file() {
+        return resolve_one(index, target);
+    }
+
+    let canonical = path
+        .canonicalize()
+        .with_context(|| format!("resolving {}", path.display()))?;
+
+    index
+        .notes
+        .iter()
+        .find(|note| {
+            // The walked path is usually the canonical one already; only fall back to a syscall when it is not.
+            note.file.path == canonical
+                || note
+                    .file
+                    .path
+                    .canonicalize()
+                    .is_ok_and(|resolved| resolved == canonical)
+        })
+        .with_context(|| format!("{} is not one of the notes under the journal root", canonical.display()))
+}
+
+/// Read a note, naming the file in any error.
+fn read_note(path: &Path) -> Result<String> {
+    std::fs::read_to_string(path).with_context(|| format!("reading note {}", path.display()))
+}
+
+/// Print a note's current status, the workflow it belongs to, and what comes next.
+fn report_status(config: &Config, note: &IndexedNote, workflow: &Workflow<'_>, current: Option<&str>) {
+    let shown = display_path(config, &note.file.path);
+
+    match &note.title {
+        Some(title) => println!("{shown}  ({title})"),
+        None => println!("{shown}"),
+    }
+
+    println!();
+    println!("status:   {}", current.unwrap_or("<unset>"));
+    println!("workflow: {}", workflow_line(workflow, current));
+
+    // Only worth a line when there is somewhere to go: at the end of the ladder, the workflow line already shows it.
+    let next = current.map_or_else(
+        || workflow.default_status(),
+        |current| workflow.resolve(current).and_then(|at| workflow.next_after(at)),
+    );
+    if let Some(next) = next {
+        println!("next:     {next}  (`selfnotes next`)");
+    }
+}
+
+/// The workflow as a single line, with the note's current status bracketed: `backlog -> [todo] -> doing`.
+fn workflow_line(workflow: &Workflow<'_>, current: Option<&str>) -> String {
+    let at = current.and_then(|current| workflow.index(current));
+
+    workflow
+        .statuses()
+        .iter()
+        .enumerate()
+        .map(|(index, status)| {
+            if Some(index) == at {
+                format!("[{status}]")
+            } else {
+                status.clone()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" -> ")
+}
+
+/// Write `target` into the note's frontmatter and report the move.
+///
+/// A note already in `target` is left alone: rewriting it would touch the file's modification time, which is what
+/// every listing here orders by, for no change at all.
+fn apply_status(config: &Config, path: &Path, content: &str, current: Option<&str>, target: &str) -> Result<()> {
+    let shown = display_path(config, path);
+
+    if current == Some(target) {
+        println!("{shown} is already `{target}`.");
+
+        return Ok(());
+    }
+
+    let updated = status::set(content, target).with_context(|| format!("updating {}", path.display()))?;
+
+    std::fs::write(path, updated).with_context(|| format!("writing note {}", path.display()))?;
+
+    println!("{shown}: {} -> {target}", current.unwrap_or("<unset>"));
+
+    Ok(())
+}
+
+/// Interactively pick a status from the workflow, starting on the note's current one.
+fn pick_status(workflow: &Workflow<'_>, current: Option<&str>) -> Result<String> {
+    let statuses = workflow.statuses();
+    let at = current.and_then(|current| workflow.index(current)).unwrap_or(0);
+
+    let choice = Select::with_theme(&ColorfulTheme::default())
+        .with_prompt("Status")
+        .items(statuses)
+        .default(at)
+        .interact()
+        .context("selecting a status")?;
+
+    Ok(statuses[choice].clone())
+}
+
+/// Print the board: one heading per status, with the notes in it beneath.
+fn print_board(config: &Config, board: &board::Board) -> Result<()> {
+    if board.is_empty() {
+        println!("Nothing on the board.");
+        println!("Declare `statuses = [...]` on a folder, then set one with `selfnotes status <note> <state>`.");
+
+        return Ok(());
+    }
+
+    let root = config.resolved_journal_root()?;
+    // A declared status is printed even when nothing is in it, since an empty stage is still part of the workflow.
+    // The unknown and untracked columns are not stages, so they only appear once something lands in them.
+    let columns = board
+        .columns
+        .iter()
+        .chain(board.unknown.iter().filter(|column| !column.cards.is_empty()))
+        .chain(std::iter::once(&board.untracked).filter(|column| !column.cards.is_empty()));
+
+    let mut previous: Option<&board::Column> = None;
+
+    for column in columns {
+        // A blank line sets a column apart from the notes above it, but a run of empty stages reads better stacked
+        // than spread over three times the lines.
+        if let Some(previous) = previous
+            && !(previous.cards.is_empty() && column.cards.is_empty())
+        {
+            println!();
+        }
+
+        print_column(
+            &root,
+            column,
+            board.unknown.iter().any(|other| other.status == column.status),
+        );
+        previous = Some(column);
+    }
+
+    if board.closed > 0 {
+        let entries = if board.closed == 1 { "entry" } else { "entries" };
+
+        println!();
+        println!("{} closed {entries} hidden (--all shows them).", board.closed);
+    }
+
+    Ok(())
+}
+
+/// Print one column: its status and count, then `<source>  <relative-path>  <title>` per note.
+///
+/// `unknown` marks a status no workflow declares, which is almost always a typo in a note rather than a stage anyone
+/// meant to have, and so is worth saying out loud rather than passing off as another column.
+fn print_column(root: &Path, column: &board::Column, unknown: bool) {
+    let count = column.cards.len() + column.truncated;
+    let note = if unknown { "  [not in the workflow]" } else { "" };
+
+    println!("{} ({count}){note}", column.status);
+
+    if column.cards.is_empty() {
+        return;
+    }
+
+    let width = column
+        .cards
+        .iter()
+        .map(|card| card.file.source.len())
+        .max()
+        .unwrap_or(0);
+
+    for card in &column.cards {
+        let shown = card.file.path.strip_prefix(root).unwrap_or(&card.file.path).display();
+
+        match &card.title {
+            Some(title) => println!("  {:<width$}  {shown}  ({title})", card.file.source),
+            None => println!("  {:<width$}  {shown}", card.file.source),
+        }
+    }
+
+    if column.truncated > 0 {
+        println!("  ... and {} more", column.truncated);
+    }
+}
+
+/// A note's path relative to the journal root, falling back to the full path when it cannot be made relative.
+fn display_path(config: &Config, path: &Path) -> String {
+    config
+        .resolved_journal_root()
+        .ok()
+        .and_then(|root| path.strip_prefix(&root).ok().map(|shown| shown.display().to_string()))
+        .unwrap_or_else(|| path.display().to_string())
+}
+
 /// Print a note's outbound links (with where each resolves) and its backlinks, paths shown relative to the root.
 fn print_links(config: &Config, index: &Index, name: &str) -> Result<()> {
     let note = resolve_one(index, name)?;
@@ -329,6 +658,17 @@ fn resolve_one<'a>(index: &'a Index, name: &str) -> Result<&'a IndexedNote> {
             bail!("`{name}` is ambiguous ({} matches):\n{candidates}", many.len())
         },
     }
+}
+
+/// A list-valued config key as a comma-separated string, or `None` when it is empty, so `config get` reports it as
+/// unset exactly as it does for a missing scalar.
+fn list_value(values: &[String]) -> Option<String> {
+    (!values.is_empty()).then(|| values.join(", "))
+}
+
+/// A list-valued config key for the `config path` listing, where an empty list reads as `<unset>`.
+fn status_list(values: &[String]) -> String {
+    list_value(values).unwrap_or_else(|| "<unset>".to_owned())
 }
 
 /// Print a message describing what happened to an entry.
@@ -618,6 +958,12 @@ fn run_config(action: ConfigAction) -> Result<()> {
                 "  people-file       = {}",
                 people::path(&merged).map_or_else(|| "<unavailable>".to_owned(), |path| path.display().to_string())
             );
+            println!("  statuses          = {}", status_list(&merged.statuses));
+            println!(
+                "  default-status    = {}",
+                merged.default_status.as_deref().unwrap_or("<unset>")
+            );
+            println!("  terminal-statuses = {}", status_list(&merged.terminal_statuses));
         },
         ConfigAction::Get { key } => {
             let config = config::load()?;
@@ -630,6 +976,9 @@ fn run_config(action: ConfigAction) -> Result<()> {
                 "space-replacement" => config.space_replacement,
                 "hash-tag-min-len" => Some(config.hash_tag_min_len().to_string()),
                 "people-file" => people::path(&config).map(|path| path.display().to_string()),
+                "statuses" => list_value(&config.statuses),
+                "default-status" => config.default_status,
+                "terminal-statuses" => list_value(&config.terminal_statuses),
                 other => bail!("unknown config key `{other}`"),
             };
 
@@ -744,7 +1093,8 @@ fn validate_config() -> Result<()> {
     let mut problems = Problems::default();
 
     // Folder directories are resolved against the effective root, so resolve it once from the merged config.
-    let root = match config::load()?.resolved_journal_root() {
+    let merged = config::load()?;
+    let root = match merged.resolved_journal_root() {
         Ok(root) => Some(root),
         Err(err) => {
             problems.error(EFFECTIVE, format!("{err:#}"));
@@ -787,7 +1137,7 @@ fn validate_config() -> Result<()> {
                     .any(|other| other.name == folder.name)
             });
             if !shadowed {
-                check_folder(folder, root.as_deref(), &layer.label, &mut problems);
+                check_folder(&merged, folder, root.as_deref(), &layer.label, &mut problems);
             }
         }
 
@@ -795,6 +1145,19 @@ fn validate_config() -> Result<()> {
             check_override(over, layer.is_local, &layer.label, &cwd, &mut problems);
         }
     }
+
+    // Statuses overlay wholesale rather than merging, so only the effective set is worth checking, once.
+    check_statuses(
+        &StatusKeys {
+            ladder: &merged.statuses,
+            names_declared_here: true,
+            default: merged.default_status.as_deref(),
+            terminal: &merged.terminal_statuses,
+        },
+        "",
+        EFFECTIVE,
+        &mut problems,
+    );
 
     report_problems(&layers, &problems)
 }
@@ -928,7 +1291,7 @@ fn check_journal_template(config: &Config, source: &str, problems: &mut Problems
 
 /// Check a single folder: no separator in its name, its directory stays under `root` (when known), its template
 /// exists, and `field_order` names a declared field. Problems are attributed to `source`.
-fn check_folder(folder: &FolderConfig, root: Option<&Path>, source: &str, problems: &mut Problems) {
+fn check_folder(merged: &Config, folder: &FolderConfig, root: Option<&Path>, source: &str, problems: &mut Problems) {
     let name = &folder.name;
 
     if folder.name.contains('/') || folder.name.contains('\\') {
@@ -965,6 +1328,93 @@ fn check_folder(folder: &FolderConfig, root: Option<&Path>, source: &str, proble
             problems.warn(
                 source,
                 format!("folder `{name}`: field_order references unknown field `{field}` (ignored)"),
+            );
+        }
+    }
+
+    // Only what this folder declares itself, checked against the ladder it ends up with. A key it merely inherits is
+    // the top-level one, already checked on its own terms, and reporting it again would repeat the same problem once
+    // per folder.
+    if !folder.statuses.is_empty() || folder.default_status.is_some() || !folder.terminal_statuses.is_empty() {
+        check_statuses(
+            &StatusKeys {
+                ladder: merged.folder_statuses(folder),
+                names_declared_here: !folder.statuses.is_empty(),
+                default: folder.default_status.as_deref(),
+                terminal: &folder.terminal_statuses,
+            },
+            &format!("folder `{name}`: "),
+            source,
+            problems,
+        );
+    }
+}
+
+/// One workflow's declarations, as [`check_statuses`] needs to see them.
+struct StatusKeys<'a> {
+    /// The statuses the workflow ends up with, whether declared here or inherited from the top level.
+    ladder: &'a [String],
+    /// Whether `ladder` was declared in the file being checked, so its own names are worth checking too.
+    names_declared_here: bool,
+    /// The `default_status` declared here, if any.
+    default: Option<&'a str>,
+    /// The `terminal_statuses` declared here.
+    terminal: &'a [String],
+}
+
+/// Check one workflow: that its statuses are usable names, and that `default_status` and `terminal_statuses` name
+/// steps it actually has.
+///
+/// `label` prefixes each message, so the same checks read correctly whether they ran on the top-level keys or on a
+/// folder's. A `default_status` outside the workflow is an error rather than a warning even though creation falls back
+/// to the first status: falling back silently is a safety net, not the behaviour anyone configured.
+fn check_statuses(workflow: &StatusKeys<'_>, label: &str, source: &str, problems: &mut Problems) {
+    let StatusKeys {
+        ladder: statuses,
+        names_declared_here,
+        default,
+        terminal,
+    } = *workflow;
+
+    if statuses.is_empty() {
+        if default.is_some() || !terminal.is_empty() {
+            problems.warn(
+                source,
+                format!("{label}default_status / terminal_statuses are set but no `statuses` are declared (ignored)"),
+            );
+        }
+
+        return;
+    }
+
+    let folded: Vec<String> = statuses.iter().map(|status| status.trim().to_lowercase()).collect();
+
+    if names_declared_here {
+        for (index, status) in statuses.iter().enumerate() {
+            if status.trim().is_empty() {
+                problems.error(source, format!("{label}statuses: a status cannot be blank"));
+            } else if folded[..index].contains(&folded[index]) {
+                problems.error(source, format!("{label}statuses: `{status}` is declared twice"));
+            }
+        }
+    }
+
+    let known = |value: &str| folded.contains(&value.trim().to_lowercase());
+
+    if let Some(default) = default
+        && !known(default)
+    {
+        problems.error(
+            source,
+            format!("{label}default_status: `{default}` is not one of the declared statuses"),
+        );
+    }
+
+    for status in terminal {
+        if !known(status) {
+            problems.error(
+                source,
+                format!("{label}terminal_statuses: `{status}` is not one of the declared statuses"),
             );
         }
     }

@@ -1,0 +1,53 @@
+[
+  {
+    "label": "selfnotes: status",
+    "command": "selfnotes",
+    "args": ["status", "$ZED_FILE"],
+    "cwd": "$ZED_DIRNAME",
+    "save": "current",
+    "reveal": "always",
+    "use_new_terminal": false,
+    "allow_concurrent_runs": false
+  },
+  {
+    "label": "selfnotes: set status",
+    "command": "selfnotes",
+    "args": ["status", "$ZED_FILE", "--pick"],
+    "cwd": "$ZED_DIRNAME",
+    "save": "current",
+    "reveal": "always",
+    "use_new_terminal": false,
+    "allow_concurrent_runs": false
+  },
+  {
+    "label": "selfnotes: next status",
+    "command": "selfnotes",
+    "args": ["next", "$ZED_FILE"],
+    "cwd": "$ZED_DIRNAME",
+    "save": "current",
+    "reveal": "no_focus",
+    "hide": "on_success",
+    "use_new_terminal": false,
+    "allow_concurrent_runs": false
+  },
+  {
+    "label": "selfnotes: board",
+    "command": "selfnotes",
+    "args": ["board"],
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "reveal": "always",
+    "use_new_terminal": false,
+    "allow_concurrent_runs": false
+  },
+  {
+    "label": "selfnotes: status -> doing",
+    "command": "selfnotes",
+    "args": ["status", "$ZED_FILE", "doing"],
+    "cwd": "$ZED_DIRNAME",
+    "save": "current",
+    "reveal": "no_focus",
+    "hide": "on_success",
+    "use_new_terminal": false,
+    "allow_concurrent_runs": false
+  }
+]

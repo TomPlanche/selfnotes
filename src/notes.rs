@@ -2,9 +2,10 @@
 //!
 //! Notes are plain text on disk, so tags and links are text conventions embedded in each file rather than a separate
 //! database: `#tag` hashtags in the body, an optional `+++`-delimited TOML frontmatter carrying `tags = [...]` (plus a
-//! human `title` and `aliases` a note can be addressed by), and `[[note-name]]` wikilinks between notes. This module
-//! walks the same journal and custom-folder locations that listing does, then parses those conventions so the `tags`,
-//! `links`, `open`, and `search` commands (and `list --tag`) can query them.
+//! human `title` and `aliases` a note can be addressed by, and a `status` recording where it sits in its workflow),
+//! and `[[note-name]]` wikilinks between notes. This module walks the same journal and custom-folder locations that
+//! listing does, then parses those conventions so the `tags`, `links`, `open`, `search`, and `board` commands (and
+//! `list --tag`) can query them.
 
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -237,6 +238,8 @@ pub struct Parsed {
     pub title: Option<String>,
     /// Frontmatter `aliases`, trimmed, with blanks dropped.
     pub aliases: Vec<String>,
+    /// Frontmatter `status`, trimmed; `None` when unset or blank.
+    pub status: Option<String>,
 }
 
 /// Parse a note's tags, wikilinks, and frontmatter title/aliases.
@@ -260,13 +263,18 @@ pub fn parse(content: &str, hash_min_len: usize) -> Parsed {
         links,
         title: meta.title,
         aliases: meta.aliases,
+        status: meta.status,
     }
 }
 
-/// All tags from a note: the frontmatter `tags` array plus every inline `#tag`, de-duplicated. See [`parse`] for
-/// `hash_min_len`.
-pub fn extract_tags(content: &str, hash_min_len: usize) -> Vec<String> {
-    parse(content, hash_min_len).tags
+/// A note's frontmatter `status`, trimmed; `None` when unset or blank.
+///
+/// Unlike [`parse`], this reads the frontmatter alone: a status is only ever written there, so scanning the body for
+/// tags and links would be work thrown away.
+pub fn extract_status(content: &str) -> Option<String> {
+    let (frontmatter, _) = split_frontmatter(content);
+
+    frontmatter.map(frontmatter_meta).and_then(|meta| meta.status)
 }
 
 /// A note's prose: everything after a leading `+++` frontmatter block, paired with the 1-based number of the file line
@@ -302,7 +310,7 @@ pub fn matches_tags(note_tags: &[String], wanted: &[String]) -> bool {
 ///
 /// The frontmatter must open on the very first line (`+++`) and close on a later line that is exactly `+++`. Anything
 /// else (no fence, or an unterminated one) is treated as having no frontmatter, and the whole input is the body.
-fn split_frontmatter(content: &str) -> (Option<&str>, &str) {
+pub fn split_frontmatter(content: &str) -> (Option<&str>, &str) {
     let mut lines = content.split_inclusive('\n');
 
     let Some(first) = lines.next() else {
@@ -330,16 +338,17 @@ fn split_frontmatter(content: &str) -> (Option<&str>, &str) {
     (None, content)
 }
 
-/// The frontmatter fields the index cares about: tags, title, and aliases.
+/// The frontmatter fields the index cares about: tags, title, aliases, and status.
 #[derive(Default)]
 struct FrontMatterMeta {
     tags: Vec<String>,
     title: Option<String>,
     aliases: Vec<String>,
+    status: Option<String>,
 }
 
-/// Read `tags`, `title`, and `aliases` out of a TOML frontmatter block, ignoring other keys and tolerating a parse
-/// error (returns defaults).
+/// Read `tags`, `title`, `aliases`, and `status` out of a TOML frontmatter block, ignoring other keys and tolerating a
+/// parse error (returns defaults).
 fn frontmatter_meta(fm: &str) -> FrontMatterMeta {
     #[derive(Deserialize)]
     struct FrontMatter {
@@ -348,6 +357,7 @@ fn frontmatter_meta(fm: &str) -> FrontMatterMeta {
         title: Option<String>,
         #[serde(default)]
         aliases: Vec<String>,
+        status: Option<String>,
     }
 
     let Ok(parsed) = toml::from_str::<FrontMatter>(fm) else {
@@ -362,6 +372,8 @@ fn frontmatter_meta(fm: &str) -> FrontMatterMeta {
             .iter()
             .filter_map(|alias| normalize_name(alias))
             .collect(),
+        // An empty `status = ""` reads as no status at all, so nothing downstream has to tell "absent" from "blank".
+        status: parsed.status.as_deref().and_then(normalize_name),
     }
 }
 
@@ -644,7 +656,7 @@ mod tests {
 
     #[test]
     fn extracts_inline_and_nested_tags() {
-        let tags = extract_tags("Fixed it today. #work #bug/auth and #work again.\n", HASH_MIN);
+        let tags = parse("Fixed it today. #work #bug/auth and #work again.\n", HASH_MIN).tags;
 
         // `#work` is de-duplicated; the nested tag keeps its full path.
         assert_eq!(tags, ["work", "bug/auth"]);
@@ -653,14 +665,18 @@ mod tests {
     #[test]
     fn heading_and_fragment_are_not_tags() {
         // `# Heading` has a space after `#`; `page#anchor` has no word boundary before it.
-        assert!(extract_tags("# Heading\n\nSee https://example.com/page#anchor here.\n", HASH_MIN).is_empty());
+        assert!(
+            parse("# Heading\n\nSee https://example.com/page#anchor here.\n", HASH_MIN)
+                .tags
+                .is_empty()
+        );
     }
 
     #[test]
     fn tags_inside_code_are_ignored() {
         let content = "Before #real\n\n```\n# not a heading, #notatag\n```\n\nInline `#alsoskipped` here.\n";
 
-        assert_eq!(extract_tags(content, HASH_MIN), ["real"]);
+        assert_eq!(parse(content, HASH_MIN).tags, ["real"]);
     }
 
     #[test]
@@ -669,13 +685,13 @@ mod tests {
         // real word that merely starts hex-like, and a nested tag with a hex segment, are kept.
         let content = "See #deadbeef and #a1b2c3d and #cafebabecafebabecafebabecafebabecafebabe.\n#decadent thoughts about #work/beef.\n";
 
-        assert_eq!(extract_tags(content, HASH_MIN), ["decadent", "work/beef"]);
+        assert_eq!(parse(content, HASH_MIN).tags, ["decadent", "work/beef"]);
     }
 
     #[test]
     fn hash_heuristic_can_be_disabled() {
         // With the threshold at 0, an all-hex token is a perfectly ordinary tag again.
-        assert_eq!(extract_tags("#deadbeef\n", 0), ["deadbeef"]);
+        assert_eq!(parse("#deadbeef\n", 0).tags, ["deadbeef"]);
     }
 
     #[test]
@@ -684,7 +700,7 @@ mod tests {
 
         // Frontmatter first (with the leading `#` stripped), then new inline tags; `work` is not repeated. Frontmatter
         // tags are explicit, so the hash heuristic never touches them.
-        assert_eq!(extract_tags(content, HASH_MIN), ["work", "bug/auth", "idea"]);
+        assert_eq!(parse(content, HASH_MIN).tags, ["work", "bug/auth", "idea"]);
     }
 
     #[test]
@@ -789,7 +805,7 @@ mod tests {
 
         assert_eq!(out, "+++\ntags = [\"daily\"]\n+++\n\n# {{date}}\n\nbody\n");
         // The seeded tag round-trips through the parser.
-        assert_eq!(extract_tags(&out, HASH_MIN), ["daily"]);
+        assert_eq!(parse(&out, HASH_MIN).tags, ["daily"]);
     }
 
     #[test]
@@ -799,7 +815,7 @@ mod tests {
         let out = ensure_frontmatter_tags(content, &["daily".into(), "standup".into()]);
 
         // The existing tag and key survive, `daily` is added once, and the result still parses.
-        let tags = extract_tags(&out, HASH_MIN);
+        let tags = parse(&out, HASH_MIN).tags;
         assert_eq!(tags, ["standup", "daily"]);
         assert!(out.contains("title = \"scrum\""));
         assert!(out.trim_start().starts_with("+++"));

@@ -1,14 +1,15 @@
 //! Full-text search across note bodies.
 //!
-//! Enumeration and parsing live in [`crate::notes`]; this module reads each walked note, applies the same `--folder`
-//! and `--tag` filters that listing uses, then scans the note's body for the query. Frontmatter is skipped so a search
-//! hits prose rather than metadata, and matching lines are grouped into snippets carrying the requested lines of
-//! surrounding context.
+//! Enumeration and parsing live in [`crate::notes`]; this module reads each walked note, applies the same `--folder`,
+//! `--tag` and `--status` filters that listing uses, then scans the note's body for the query. Frontmatter is skipped
+//! so a search hits prose rather than metadata, and matching lines are grouped into snippets carrying the requested
+//! lines of surrounding context.
 
 use anyhow::{Result, bail};
 
 use crate::config::Config;
 use crate::notes::{self, NoteFile};
+use crate::status;
 
 /// What to search for, and over which notes.
 #[derive(Debug, Clone, Copy)]
@@ -19,6 +20,8 @@ pub struct Query<'a> {
     pub folder: Option<&'a str>,
     /// Only search notes carrying every one of these tags (see [`crate::notes::matches_tags`]).
     pub tags: &'a [String],
+    /// Only search notes whose frontmatter `status` is one of these (see [`crate::status::matches`]).
+    pub statuses: &'a [String],
     /// Match the query's case exactly; otherwise matching is case-insensitive.
     pub case_sensitive: bool,
     /// Lines of surrounding context to keep either side of a matching line.
@@ -87,7 +90,8 @@ pub fn search(config: &Config, query: &Query<'_>) -> Result<Vec<Hit>> {
         };
 
         let parsed = notes::parse(&content, hash_min_len);
-        if !notes::matches_tags(&parsed.tags, query.tags) {
+        if !notes::matches_tags(&parsed.tags, query.tags) || !status::matches(parsed.status.as_deref(), query.statuses)
+        {
             continue;
         }
 
@@ -187,6 +191,7 @@ mod tests {
             text,
             folder: None,
             tags: &[],
+            statuses: &[],
             case_sensitive: false,
             context: 0,
             limit: 10,

@@ -1,37 +1,49 @@
-//! Listing recent entries across the journal and custom folders, newest first, optionally filtered by tag.
+//! Listing recent entries across the journal and custom folders, newest first, optionally filtered by tag or status.
 //!
-//! Enumeration lives in [`crate::notes`]; this module orders the results by modification time and, when a `--tag`
-//! filter is given, reads each file to keep only the notes carrying those tags.
+//! Enumeration lives in [`crate::notes`]; this module orders the results by modification time and, when a `--tag` or
+//! `--status` filter is given, reads each file to keep only the notes that match.
 
 use anyhow::Result;
 
 use crate::config::Config;
 use crate::notes::{self, NoteFile};
+use crate::status;
 
 /// The most recently modified entries, newest first, capped at `limit`.
 ///
 /// `folder` restricts the sources scanned (see [`crate::notes::walk`]). When `tags` is non-empty, only notes carrying
 /// every listed tag are kept; matching is case-insensitive and a requested tag also matches its nested children, so
-/// `work` matches `work/project`.
-pub fn recent(config: &Config, folder: Option<&str>, limit: usize, tags: &[String]) -> Result<Vec<NoteFile>> {
+/// `work` matches `work/project`. When `statuses` is non-empty, only notes whose frontmatter `status` is one of them
+/// are kept (see [`crate::status::matches`]).
+pub fn recent(
+    config: &Config,
+    folder: Option<&str>,
+    limit: usize,
+    tags: &[String],
+    statuses: &[String],
+) -> Result<Vec<NoteFile>> {
     let files = notes::walk(config, folder)?;
-    let files = if tags.is_empty() {
+    let files = if tags.is_empty() && statuses.is_empty() {
         files
     } else {
-        filter_by_tags(files, tags, config.hash_tag_min_len())
+        filter(files, tags, statuses, config.hash_tag_min_len())
     };
 
     Ok(top_n(files, limit))
 }
 
-/// Keep the notes whose tags satisfy every requested tag, reading each file to inspect it. Unreadable files are
-/// dropped, matching how enumeration tolerates individual failures. `hash_min_len` is forwarded to the tag parser.
-fn filter_by_tags(files: Vec<NoteFile>, wanted: &[String], hash_min_len: usize) -> Vec<NoteFile> {
+/// Keep the notes satisfying every requested tag and one of the requested statuses, reading each file to inspect it.
+/// Unreadable files are dropped, matching how enumeration tolerates individual failures. `hash_min_len` is forwarded
+/// to the tag parser.
+fn filter(files: Vec<NoteFile>, tags: &[String], statuses: &[String], hash_min_len: usize) -> Vec<NoteFile> {
     files
         .into_iter()
         .filter(|file| {
-            std::fs::read_to_string(&file.path)
-                .is_ok_and(|content| notes::matches_tags(&notes::extract_tags(&content, hash_min_len), wanted))
+            std::fs::read_to_string(&file.path).is_ok_and(|content| {
+                let parsed = notes::parse(&content, hash_min_len);
+
+                notes::matches_tags(&parsed.tags, tags) && status::matches(parsed.status.as_deref(), statuses)
+            })
         })
         .collect()
 }

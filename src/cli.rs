@@ -52,6 +52,10 @@ pub enum Command {
         /// `--tag work` also matches `work/project`.
         #[arg(long = "tag")]
         tags: Vec<String>,
+        /// Only show entries whose frontmatter `status` is this (repeatable; any listed status matches, since a note
+        /// only ever holds one).
+        #[arg(long = "status")]
+        statuses: Vec<String>,
     },
     /// Search note bodies for text (newest first).
     Search {
@@ -67,6 +71,10 @@ pub enum Command {
         /// `--tag work` also matches `work/project`.
         #[arg(long = "tag")]
         tags: Vec<String>,
+        /// Only search notes whose frontmatter `status` is this (repeatable; any listed status matches, since a note
+        /// only ever holds one).
+        #[arg(long = "status")]
+        statuses: Vec<String>,
         /// Lines of context to show either side of each match.
         #[arg(short = 'C', long, default_value_t = 0)]
         context: usize,
@@ -85,6 +93,44 @@ pub enum Command {
         /// Sort order for the listing.
         #[arg(long, value_enum, default_value_t = TagSort::Count)]
         sort: TagSort,
+    },
+    /// Show a note's status, or move it to another one.
+    ///
+    /// Without `<state>` nothing is written: the current status is printed, along with the statuses the note's folder
+    /// declares. Pass a state (or `--pick`) to move the note there, which rewrites the `status` line of its `+++`
+    /// frontmatter and leaves the rest of the file untouched.
+    Status {
+        /// Note to inspect, by name (optionally `folder/name`) or by path.
+        name: String,
+        /// Status to move the note to. Matched case-insensitively against the folder's configured statuses.
+        state: Option<String>,
+        /// Choose the new status from a list instead of naming it.
+        #[arg(long, conflicts_with = "state")]
+        pick: bool,
+    },
+    /// Move a note one step along its folder's workflow.
+    ///
+    /// A note with no status yet starts at the folder's `default_status`. One already in the last status stays there,
+    /// and says so rather than failing.
+    #[command(visible_alias = "advance")]
+    Next {
+        /// Note to move on, by name (optionally `folder/name`) or by path.
+        name: String,
+    },
+    /// Show notes grouped by status, one column per step of the workflow.
+    Board {
+        /// Restrict to a single custom folder, which also picks the workflow the columns come from.
+        #[arg(long)]
+        folder: Option<String>,
+        /// Only show entries carrying this tag (repeatable; every listed tag must match).
+        #[arg(long = "tag")]
+        tags: Vec<String>,
+        /// Also show the closed statuses (a folder's `terminal_statuses`), which are hidden by default.
+        #[arg(short, long)]
+        all: bool,
+        /// Maximum entries per column; `0` shows every one of them.
+        #[arg(short = 'n', long, default_value_t = 0)]
+        limit: usize,
     },
     /// Show a note's outbound `[[links]]` and the notes that link back to it.
     Links {
@@ -181,7 +227,8 @@ pub enum ConfigAction {
     },
     /// Print a single configuration value.
     Get {
-        /// One of: journal-root, format, editor, cursor-format, space-replacement, hash-tag-min-len, people-file.
+        /// One of: journal-root, format, editor, cursor-format, space-replacement, hash-tag-min-len, people-file,
+        /// statuses, default-status, terminal-statuses.
         key: String,
     },
     /// Set a value in the global configuration.

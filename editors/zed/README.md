@@ -29,3 +29,33 @@ A GUI launch inherits a shorter `$PATH` than your terminal does, so `selfnotes` 
 ```
 
 The server logs how many people it loaded, and from which file, as it starts. `debug: open language server logs` shows it.
+
+## Statuses from the editor
+
+[`tasks.json`](./tasks.json) here is a starting point for driving [note statuses](../../README.md#statuses) without leaving Zed. Copy it into your notes repository as `.zed/tasks.json` (or merge it into `~/.config/zed/tasks.json` to have the tasks everywhere), then run `task: spawn` from the command palette.
+
+It defines five tasks:
+
+| Task | What it runs | What it does |
+| --- | --- | --- |
+| `selfnotes: status` | `selfnotes status $ZED_FILE` | Shows where the open note sits in its workflow, and what comes next. |
+| `selfnotes: set status` | `selfnotes status $ZED_FILE --pick` | Picks the new status from a list, right in the task terminal. |
+| `selfnotes: next status` | `selfnotes next $ZED_FILE` | Moves the open note one step along its workflow. |
+| `selfnotes: board` | `selfnotes board` | Shows every tracked note grouped by status. |
+| `selfnotes: status -> doing` | `selfnotes status $ZED_FILE doing` | One status, one keystroke. Copy the entry per status you want bound. |
+
+The commands take the note's path, so they act on whatever buffer is open, whatever it is called. Each task sets `"save": "current"`, so Zed writes the buffer before `selfnotes` reads it, and `"cwd": "$ZED_DIRNAME"`, so a `.selfnotes.toml` next to your notes is found the same way it is from a shell.
+
+Bind the ones you use to a key in `keymap.json`:
+
+```json
+{
+  "context": "Editor && extension==md",
+  "bindings": {
+    "cmd-alt-n": ["task::Spawn", { "task_name": "selfnotes: next status" }],
+    "cmd-alt-s": ["task::Spawn", { "task_name": "selfnotes: set status" }]
+  }
+}
+```
+
+A status change rewrites the frontmatter on disk. Zed reloads a buffer with no unsaved changes, which `"save": "current"` guarantees, so the new `status` line appears in the editor on its own.

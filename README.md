@@ -51,18 +51,33 @@ selfnotes list -n 20            # show up to 20 entries
 selfnotes list --folder journal # only the built-in journal
 selfnotes list --folder ticket  # only the `ticket` folder
 selfnotes list --tag work       # only entries tagged #work (repeatable; all must match)
+selfnotes list --status doing   # only entries whose status is `doing` (repeatable; any may match)
 
 selfnotes search "login bug"            # find notes whose text contains it, newest first
 selfnotes search login -C 2             # show 2 lines of context around each match
 selfnotes search login -n 20            # show up to 20 notes
 selfnotes search login --folder ticket  # only the `ticket` folder
 selfnotes search login --tag work       # only notes tagged #work (repeatable; all must match)
+selfnotes search login --status doing   # only notes whose status is `doing` (repeatable; any may match)
 selfnotes search LOGIN --case-sensitive # exact case (matching is case-insensitive by default)
 selfnotes search login --files          # print only the matching notes' paths
 
 selfnotes tags                 # list every tag with a note count, most-used first
 selfnotes tags --sort name     # alphabetical instead
 selfnotes tags --folder ticket # only tags in the `ticket` folder
+
+selfnotes status login-bug         # show where a note sits in its workflow
+selfnotes status login-bug doing   # move it to `doing`
+selfnotes status login-bug --pick  # choose the new status from a list
+selfnotes status ideas/login-bug.md doing  # a path works too, for editor integrations
+selfnotes next login-bug           # move it one step along the workflow
+selfnotes advance login-bug        # alias for `next`
+
+selfnotes board                 # every tracked note, grouped by status
+selfnotes board --folder ticket # only the `ticket` folder, in its own workflow order
+selfnotes board --tag work      # only notes tagged #work
+selfnotes board --all           # also show the closed statuses, hidden by default
+selfnotes board -n 5            # at most 5 notes per column
 
 selfnotes links login-bug # show a note's [[links]] and its backlinks
 selfnotes open login-bug  # resolve a [[wikilink]] target and open it
@@ -89,7 +104,12 @@ selfnotes config set cursor-format "{path}:{line}:{column}"
 selfnotes config set space-replacement "-"   # file "login bug" as login-bug.md
 selfnotes config set people-file ~/work/people.toml
 selfnotes config set hash-tag-min-len 7   # tune the git-hash-vs-tag threshold
+selfnotes config get statuses             # the workflow, as a comma-separated list
+selfnotes config get default-status
+selfnotes config get terminal-statuses
 ```
+
+Lists such as `statuses` are read by `config get` but not written by `config set`, which only handles single values. Edit them with `selfnotes config open`.
 
 By default, creating an entry opens it in your editor. The editor is invoked with two arguments, the journal root and the entry file, so an editor like `zed` opens the whole notes workspace and focuses the file:
 
@@ -127,7 +147,7 @@ In the rendered template, the date placeholders describe the day the entry is *f
 2026-07-01 09:00  idea     idea/dark-mode.md
 ```
 
-Pass `-n`/`--limit` to change how many entries are shown (default 10). Pass `--folder <name>` to restrict the listing to a single source: a custom folder's name, or the reserved value `journal` for the built-in journal. Dotfiles are skipped, and a missing folder directory simply contributes nothing.
+Pass `-n`/`--limit` to change how many entries are shown (default 10). Pass `--folder <name>` to restrict the listing to a single source: a custom folder's name, or the reserved value `journal` for the built-in journal. Dotfiles are skipped, and a missing folder directory simply contributes nothing. `--tag` and `--status` filter the listing further, see [Tags](#tags) and [Statuses](#statuses).
 
 ## Searching
 
@@ -161,7 +181,7 @@ journal  2026/07/27.md  (Sprint planning)  [2 lines]
      17: The login bug again, near the end.
 ```
 
-Search accepts the same filters as listing: `-n`/`--limit` (default 10) caps how many notes are shown, `--folder <name>` restricts to one source, and `--tag <tag>` (repeatable) keeps only notes carrying every listed tag, with the same case-insensitive, nested-tag matching `list --tag` uses. Pass `-l`/`--files` to print just the paths of the matching notes, one per line, which is convenient for piping into another tool.
+Search accepts the same filters as listing: `-n`/`--limit` (default 10) caps how many notes are shown, `--folder <name>` restricts to one source, `--tag <tag>` (repeatable) keeps only notes carrying every listed tag, with the same case-insensitive, nested-tag matching `list --tag` uses, and `--status <state>` (repeatable) keeps only notes in one of those [statuses](#statuses). Pass `-l`/`--files` to print just the paths of the matching notes, one per line, which is convenient for piping into another tool.
 
 Only a note's body is searched: a `+++` frontmatter block at the top is skipped, so a search for `tags` does not match every tagged note's metadata. Unlike tag and link parsing, fenced code blocks and inline code spans *are* searched, since finding a command or a snippet you wrote down is usually the point.
 
@@ -266,6 +286,115 @@ selfnotes open "Login bug investigation"   # by title
 ```
 
 And in prose, `[[login-bug]]`, `[[PROJ-1]]`, and `[[Login bug investigation]]` all link to it. When a name (filename, title, or alias) is shared by more than one note it is reported as ambiguous, and `links` / `open` list the candidates, showing each note's title where it has one, so you can qualify with `folder/name`.
+
+## Statuses
+
+A note can also carry a `status`: where it sits in a workflow you declare, such as `backlog`, `todo`, `doing`, `staging`, `prod`. It is the piece that turns a folder of notes into a board of tickets.
+
+A status is not a tag, and it is not stored as one. A tag is an open set and a note can carry any number of them; a status is single-valued, exclusive and mutable, so it lives in its own key of the `+++` frontmatter and moving a note means replacing that value rather than adding another:
+
+```markdown
++++
+tags = ["idea"]
+status = "doing"
++++
+
+# MR/PR support
+
+Add the possibility to create MR/PRs from the command line.
+```
+
+### Declaring a workflow
+
+Nothing is tracked until a folder says which statuses its entries may take. The ladder belongs in the config rather than in the binary: a ticket folder ends at `prod`, an ideas folder ends at `dropped`, and neither is `selfnotes`' business to decide.
+
+```toml
+# The default ladder for folders that declare none of their own.
+statuses = ["backlog", "todo", "doing", "blocked", "done", "dropped"]
+default_status = "backlog"     # what a new entry starts in; defaults to the first status
+terminal_statuses = ["done", "dropped"]   # what closes an entry
+
+[[custom_folders]]
+name = "ticket"
+path = "tickets"
+# A folder replaces the ladder rather than extending it: a workflow is an ordered whole.
+statuses = ["backlog", "todo", "doing", "staging", "prod"]
+terminal_statuses = ["prod"]
+```
+
+The three keys fall back independently, so a folder can rename the ladder without restating which step is the default. Declaration order is the workflow order: it is what `selfnotes next` walks and the order a board shows its columns in. `selfnotes config validate` reports a blank or repeated status, and a `default_status` or `terminal_statuses` naming a step the workflow does not have.
+
+Statuses apply to custom folders only. A journal entry is a dated log rather than a ticket, so it never carries one, and a top-level `statuses` is a default *for folders* rather than a workflow every note is dragged into.
+
+New entries are created with `default_status` already in their frontmatter, alongside any `default_tags`. A template that sets its own `status` (from a [custom field](#custom-folder-fields), say) keeps it.
+
+### Moving a note
+
+```
+$ selfnotes status mr-pr-support
+ideas/mr-pr-support.md  (MR/PR support)
+
+status:   todo
+workflow: backlog -> [todo] -> doing -> blocked -> done -> dropped
+next:     doing  (`selfnotes next`)
+
+$ selfnotes next mr-pr-support
+ideas/mr-pr-support.md: todo -> doing
+
+$ selfnotes status mr-pr-support blocked
+ideas/mr-pr-support.md: doing -> blocked
+```
+
+`selfnotes status <note>` on its own writes nothing: it reports where the note is, the workflow it belongs to, and what comes next. Pass a state to move it there, or `--pick` to choose from a list. A state is matched case-insensitively and stored the way the config spells it, so `DOING` is filed as `doing`; a state the workflow does not have is refused, with the ones it does have.
+
+`selfnotes next` (aliased `advance`) moves a note one step along. A note with no status yet joins at the folder's `default_status`, and one already in the last status says so rather than failing.
+
+Both accept a note by name, exactly as `links` and `open` do, or by path. The path form is what editor integrations use, since it needs no guessing about how a note is named and is never ambiguous between two folders holding the same name.
+
+Writing a status edits a file you wrote, so only one line changes. An existing `status` line is replaced where it stands, keeping its indentation and its place among the other keys; otherwise the assignment is inserted after the last top-level key, before any `[table]` and the comments introducing it. Comments, key order and formatting are left byte for byte as they were, and a frontmatter that is not valid TOML (or a `+++` fence that is never closed) is refused rather than guessed at.
+
+### The board
+
+`selfnotes board` groups every tracked note by status, in workflow order:
+
+```
+$ selfnotes board
+backlog (0)
+todo (0)
+
+doing (1)
+  idea  ideas/mr-pr-support.md  (MR/PR support)
+
+blocked (0)
+
+staging (1)
+  ticket  tickets/deploy-pipeline.md
+
+(no status) (1)
+  idea  ideas/push-branch-after-creation.md
+
+1 closed entry hidden (--all shows them).
+```
+
+A declared status keeps its column even when nothing is in it, since an empty stage is still part of the workflow. Closed statuses (a folder's `terminal_statuses`) are left out, with a count at the bottom; `--all` brings them back. Notes carrying no status yet gather under `(no status)`, which is your triage list, and a status no workflow declares gets its own column marked `[not in the workflow]`, which is almost always a typo worth seeing.
+
+Without `--folder`, the columns are every folder's workflow in turn, de-duplicated in configuration order, so folders sharing a ladder share its columns. With `--folder <name>`, the board is that folder alone, in its own workflow order. `--tag` filters exactly as it does everywhere else, and `-n` caps each column.
+
+### Filtering by status
+
+`list` and `search` both take `--status`, alongside `--tag`:
+
+```
+selfnotes list --status doing
+selfnotes list --status todo --status doing   # either one
+selfnotes search "login bug" --status blocked
+```
+
+Repeating `--tag` requires every listed tag, but repeating `--status` accepts any of them: a note only ever holds one status, so several can only sensibly mean alternatives. Matching is case-insensitive, and a note with no status matches no `--status` filter.
+
+### From your editor
+
+The commands take a path, so an editor can hand over the buffer it is on. For Zed, [`editors/zed/tasks.json`](./editors/zed/tasks.json) is a ready-made set of [tasks](https://zed.dev/docs/tasks): show the status of the open note, pick a new one, move it one step along, or open the board, each bindable to a key. Copy it into your notes repository as `.zed/tasks.json`. See [the extension's README](./editors/zed/README.md#statuses-from-the-editor) for the details.
 
 ## Mentions
 
@@ -494,6 +623,12 @@ space_replacement = "-"
 hash_tag_min_len = 6
 # Roster of people completed after an `@` (defaults to people.toml beside this file).
 people_file = "~/.config/selfnotes/people.toml"
+# Default workflow for folders that declare none of their own (omit to track no statuses).
+statuses = ["backlog", "todo", "doing", "blocked", "done", "dropped"]
+# What a new entry starts in; defaults to the first status above.
+default_status = "backlog"
+# Statuses that close an entry, which `selfnotes board` hides unless given --all.
+terminal_statuses = ["done", "dropped"]
 
 [journal]
 # Optional template rendered into new journal entries.
@@ -512,6 +647,9 @@ template_file = "~/.config/selfnotes/templates/ticket.md"
 format = "md"
 # Tickets are also tagged #work.
 default_tags = ["work"]
+# Replaces the top-level statuses for this folder's entries.
+statuses = ["backlog", "todo", "doing", "staging", "prod"]
+terminal_statuses = ["prod"]
 
 [[custom_folders]]
 name = "idea"
@@ -560,7 +698,9 @@ A name that already contains no spaces is untouched, so switching the key on doe
 
 ### Validating the configuration
 
-`selfnotes config validate` checks every config file that contributes to the effective configuration and prints a verdict (`valid` / `INVALID`) per file, with each problem attributed to the file it came from. It exits non-zero when any file is invalid, so it fits in scripts and pre-flight checks. The blocking problems are: an unset `journal_root`, a custom folder whose directory would escape the root it resolves against (via its `path` or a name containing `..`), a folder `name` containing a path separator (`/` or `\`), a `space_replacement` (top level or per folder) containing a path separator, and a referenced `template_file` (journal or folder) that does not exist. A `field_order` entry naming a field that no field declares is reported as a warning rather than an error.
+`selfnotes config validate` checks every config file that contributes to the effective configuration and prints a verdict (`valid` / `INVALID`) per file, with each problem attributed to the file it came from. It exits non-zero when any file is invalid, so it fits in scripts and pre-flight checks. The blocking problems are: an unset `journal_root`, a custom folder whose directory would escape the root it resolves against (via its `path` or a name containing `..`), a folder `name` containing a path separator (`/` or `\`), a `space_replacement` (top level or per folder) containing a path separator, a referenced `template_file` (journal or folder) that does not exist, and a workflow that does not hold together: a blank or repeated status, or a `default_status` or `terminal_statuses` naming a step its `statuses` does not have. A `field_order` entry naming a field that no field declares is reported as a warning rather than an error, as is a `default_status` or `terminal_statuses` set where no `statuses` are declared at all.
+
+Each folder is checked on the status keys it declares itself, against the ladder it ends up with, so a key it merely inherits from the top level is reported once, where it is written, rather than once per folder.
 
 Each file is judged on what actually takes effect: a folder or journal template shadowed by a higher-priority layer is not re-checked, and folder directories are resolved against the effective journal root even when a given file does not set its own root. The set of files checked mirrors what loading merges: the global config, each matching override's referenced config, and the nearest local `.selfnotes.toml`.
 
