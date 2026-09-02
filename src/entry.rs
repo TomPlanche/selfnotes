@@ -65,6 +65,9 @@ pub fn create_journal(config: &Config, date: NaiveDate) -> Result<Entry> {
 /// `fields` are the resolved custom-field values, exposed to the template as
 /// `{{<folder-name>.<field>}}`.
 ///
+/// `extra_tags` are this entry's own tags, asked for at creation or passed on the command line; they are appended to
+/// the folder's resolved `default_tags` rather than replacing them, so a folder's own vocabulary always holds.
+///
 /// A configured `space_replacement` only shapes the file name. The template still renders `{{name}}` as typed, so an
 /// entry filed as `login-bug.md` keeps `# login bug` as its heading.
 pub fn create_folder_entry(
@@ -72,6 +75,7 @@ pub fn create_folder_entry(
     folder: &FolderConfig,
     name: &str,
     fields: Vec<(String, String)>,
+    extra_tags: &[String],
 ) -> Result<Entry> {
     // Re-validate at the sink so the invariant holds for every caller. `main` runs these same checks earlier to fail
     // before prompting the user; both are cheap and idempotent.
@@ -93,14 +97,15 @@ pub fn create_folder_entry(
     let default = "# {{name}}\n\n_Created {{datetime}}_\n\n";
     let status = Workflow::for_folder(config, folder).default_status();
 
-    write_entry(
-        &path,
-        template,
-        default,
-        &ctx,
-        &config.folder_default_tags(folder),
-        status,
-    )
+    let mut tags = config.folder_default_tags(folder);
+
+    for tag in extra_tags {
+        if !tags.contains(tag) {
+            tags.push(tag.clone());
+        }
+    }
+
+    write_entry(&path, template, default, &ctx, &tags, status)
 }
 
 /// Resolve the directory a folder's entries live in: `<root>/<folder.path-or-name>`.
@@ -235,8 +240,10 @@ fn write_entry(
         None => default.to_string(),
     };
 
-    let raw = crate::notes::ensure_frontmatter_tags(&raw, default_tags);
+    // Status first: seeding tags re-serializes the frontmatter table, which sorts the keys, so a status already in
+    // place is sorted with them instead of being appended after the block a template laid out.
     let raw = status::seed(&raw, default_status);
+    let raw = crate::notes::ensure_frontmatter_tags(&raw, default_tags);
     let rendered = template::render(&raw, ctx);
 
     std::fs::write(path, &rendered.content).with_context(|| format!("writing entry {}", path.display()))?;
@@ -406,7 +413,7 @@ mod tests {
         let root = TempRoot::new("space-replacement");
         let config = root.config(Some("-"));
 
-        let entry = create_folder_entry(&config, &ticket_folder(), "login bug", Vec::new()).unwrap();
+        let entry = create_folder_entry(&config, &ticket_folder(), "login bug", Vec::new(), &[]).unwrap();
 
         assert_eq!(entry.path, root.0.join("tickets/login-bug.md"));
         // The name reaches the template as typed, so the entry still reads as a sentence.
@@ -422,7 +429,7 @@ mod tests {
             ..ticket_folder()
         };
 
-        let entry = create_folder_entry(&config, &folder, "login bug", Vec::new()).unwrap();
+        let entry = create_folder_entry(&config, &folder, "login bug", Vec::new(), &[]).unwrap();
 
         assert_eq!(entry.path, root.0.join("tickets/login_bug.md"));
     }
@@ -432,9 +439,31 @@ mod tests {
         let root = TempRoot::new("space-replacement-unset");
         let config = root.config(None);
 
-        let entry = create_folder_entry(&config, &ticket_folder(), "login bug", Vec::new()).unwrap();
+        let entry = create_folder_entry(&config, &ticket_folder(), "login bug", Vec::new(), &[]).unwrap();
 
         assert_eq!(entry.path, root.0.join("tickets/login bug.md"));
+    }
+
+    #[test]
+    fn extra_tags_are_appended_to_the_folder_defaults() {
+        let root = TempRoot::new("extra-tags");
+        let mut config = root.config(None);
+        config.default_tags = vec!["me".into()];
+
+        let folder = FolderConfig {
+            default_tags: vec!["ticket".into()],
+            ..ticket_folder()
+        };
+        // `ticket` is already a default: an entry repeating it must not end up carrying it twice.
+        let extra = ["auth".to_owned(), "ticket".to_owned(), "bug/login".to_owned()];
+
+        let entry = create_folder_entry(&config, &folder, "login-bug", Vec::new(), &extra).unwrap();
+
+        assert!(
+            std::fs::read_to_string(&entry.path)
+                .unwrap()
+                .contains(r#"tags = ["me", "ticket", "auth", "bug/login"]"#)
+        );
     }
 
     #[test]
@@ -442,7 +471,7 @@ mod tests {
         let root = TempRoot::new("space-replacement-escape");
         let config = root.config(Some("/../"));
 
-        assert!(create_folder_entry(&config, &ticket_folder(), "login bug", Vec::new()).is_err());
+        assert!(create_folder_entry(&config, &ticket_folder(), "login bug", Vec::new(), &[]).is_err());
     }
 
     #[test]

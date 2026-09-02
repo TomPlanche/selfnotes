@@ -35,6 +35,10 @@ pub enum Command {
         folder: Option<String>,
         /// Entry name; prompted for if omitted.
         name: Option<String>,
+        /// Tag added on top of the folder's `default_tags` (repeatable, or comma-separated). Giving it at all, even
+        /// empty, answers a folder's `prompt_tags` prompt instead of being asked.
+        #[arg(long = "tag", value_delimiter = ',')]
+        tags: Vec<String>,
         /// Skip opening the entry in your editor after creating it.
         #[arg(long)]
         no_open: bool,

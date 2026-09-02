@@ -47,7 +47,12 @@ fn main() -> Result<()> {
             report(&entry);
             maybe_open(&config, &entry, no_open);
         },
-        Command::New { folder, name, no_open } => run_new(folder, name, no_open)?,
+        Command::New {
+            folder,
+            name,
+            tags,
+            no_open,
+        } => run_new(folder, name, &tags, no_open)?,
         Command::List {
             limit,
             folder,
@@ -237,7 +242,7 @@ fn print_tags(index: &Index, sort: TagSort) {
 }
 
 /// Handle `new`: create (or reopen) an entry in a custom folder, prompting for whatever was not given.
-fn run_new(folder: Option<String>, name: Option<String>, no_open: bool) -> Result<()> {
+fn run_new(folder: Option<String>, name: Option<String>, tags: &[String], no_open: bool) -> Result<()> {
     let config = config::load()?;
     if config.custom_folders.is_empty() {
         bail!("no custom folders are configured; add a [[custom_folders]] entry to your config");
@@ -274,7 +279,15 @@ fn run_new(folder: Option<String>, name: Option<String>, no_open: bool) -> Resul
 
     let fields = prompt_fields(&folder_config)?;
 
-    let entry = entry::create_folder_entry(&config, &folder_config, name, fields)?;
+    // `--tag` given at all, even as an empty value, is an answer: it stands in for the prompt so that a folder which
+    // asks for tags stays scriptable from an editor task or a shell alias.
+    let extra_tags = if tags.is_empty() && config.folder_prompt_tags(&folder_config) {
+        prompt_tags()?
+    } else {
+        notes::parse_tag_list(&tags.join(","))
+    };
+
+    let entry = entry::create_folder_entry(&config, &folder_config, name, fields, &extra_tags)?;
     report(&entry);
     maybe_open(&config, &entry, no_open);
 
@@ -724,6 +737,20 @@ fn prompt_name() -> Result<String> {
         .context("reading entry name")
 }
 
+/// Prompt for the entry's own tags as one comma-separated line, e.g. `auth,bug/login`.
+///
+/// One line rather than one prompt per tag: tagging is an afterthought at creation time, and an empty answer has to
+/// cost a single keystroke or it turns every new note into a negotiation.
+fn prompt_tags() -> Result<Vec<String>> {
+    let answer = Input::<String>::with_theme(&ColorfulTheme::default())
+        .with_prompt("Tags (comma-separated)")
+        .allow_empty(true)
+        .interact_text()
+        .context("reading tags")?;
+
+    Ok(notes::parse_tag_list(&answer))
+}
+
 /// Prompt for each of a folder's custom fields, returning `(name, value)` pairs ready to hand to the template context.
 fn prompt_fields(folder: &FolderConfig) -> Result<Vec<(String, String)>> {
     let mut values = Vec::with_capacity(folder.fields.len());
@@ -958,6 +985,12 @@ fn run_config(action: ConfigAction) -> Result<()> {
                 "  people-file       = {}",
                 people::path(&merged).map_or_else(|| "<unavailable>".to_owned(), |path| path.display().to_string())
             );
+            println!(
+                "  prompt-tags       = {}",
+                merged
+                    .prompt_tags
+                    .map_or_else(|| "<unset>".to_owned(), |value| value.to_string())
+            );
             println!("  statuses          = {}", status_list(&merged.statuses));
             println!(
                 "  default-status    = {}",
@@ -976,6 +1009,7 @@ fn run_config(action: ConfigAction) -> Result<()> {
                 "space-replacement" => config.space_replacement,
                 "hash-tag-min-len" => Some(config.hash_tag_min_len().to_string()),
                 "people-file" => people::path(&config).map(|path| path.display().to_string()),
+                "prompt-tags" => config.prompt_tags.map(|value| value.to_string()),
                 "statuses" => list_value(&config.statuses),
                 "default-status" => config.default_status,
                 "terminal-statuses" => list_value(&config.terminal_statuses),
@@ -997,6 +1031,9 @@ fn run_config(action: ConfigAction) -> Result<()> {
                 "cursor-format" => config.cursor_format = Some(value),
                 "space-replacement" => config.space_replacement = Some(value),
                 "people-file" => config.people_file = Some(value),
+                "prompt-tags" => {
+                    config.prompt_tags = Some(value.parse().context("prompt-tags must be `true` or `false`")?);
+                },
                 "hash-tag-min-len" => {
                     config.hash_tag_min_len = Some(
                         value

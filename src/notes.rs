@@ -397,6 +397,25 @@ fn is_hash_like(tag: &str, min_len: usize) -> bool {
     min_len != 0 && tag.len() >= min_len && tag.chars().all(|c| c.is_ascii_hexdigit())
 }
 
+/// Split a comma-separated tag list, as typed at a prompt or passed to `--tag`, into individual tags.
+///
+/// Blank entries are dropped rather than written as empty tags, so a trailing comma or a stray space costs nothing, and
+/// duplicates are collapsed to keep the frontmatter honest. A leading `#` is stripped: tags are written bare in
+/// frontmatter, but they are read and spoken as `#work`, so typing one that way is an answer, not a mistake.
+pub fn parse_tag_list(input: &str) -> Vec<String> {
+    let mut tags = Vec::new();
+
+    for tag in input.split(',') {
+        let tag = tag.trim().trim_start_matches('#').trim();
+
+        if !tag.is_empty() && !tags.iter().any(|kept| kept == tag) {
+            tags.push(tag.to_owned());
+        }
+    }
+
+    tags
+}
+
 /// Ensure the note `content` carries every tag in `tags` in a leading `+++` TOML frontmatter block.
 ///
 /// Applied to the raw template before rendering, so any `{{cursor}}` position downstream stays correct. With no tags,
@@ -653,6 +672,14 @@ mod tests {
 
     /// Default hash-tag threshold, so parsing tests exercise the shipped behaviour.
     const HASH_MIN: usize = crate::config::DEFAULT_HASH_TAG_MIN_LEN;
+
+    #[test]
+    fn a_tag_list_drops_blanks_hashes_and_repeats() {
+        assert_eq!(parse_tag_list("auth, bug/login ,auth"), ["auth", "bug/login"]);
+        assert_eq!(parse_tag_list("#auth,# spaced ,"), ["auth", "spaced"]);
+        assert_eq!(parse_tag_list(""), Vec::<String>::new());
+        assert_eq!(parse_tag_list("  , ,#"), Vec::<String>::new());
+    }
 
     #[test]
     fn extracts_inline_and_nested_tags() {

@@ -43,6 +43,7 @@ selfnotes new                    # pick a folder, then enter a name (interactive
 selfnotes new ticket             # skip the folder picker, prompt for a name
 selfnotes new ticket login-bug   # pass both directly
 selfnotes new ticket "login bug" # a spaced name (see `space_replacement`)
+selfnotes new ticket login-bug --tag auth,bug/login   # tag it without being asked
 selfnotes new ticket login-bug --no-open
 
 selfnotes list                  # list recent entries, newest first
@@ -233,6 +234,42 @@ default_tags = ["work"]        # tickets also get #work
 ```
 
 With the above, `selfnotes` (a journal entry) starts with `tags = ["me", "daily"]` in its frontmatter.
+
+#### Tags for one entry
+
+Default tags describe a folder; the tags that say what an entry is about belong to that entry alone. Set `prompt_tags = true` and `selfnotes new` asks for them once the folder's fields are filled in, as a single comma-separated line:
+
+```toml
+prompt_tags = false            # the default for every folder
+
+[[custom_folders]]
+name = "ticket"
+default_tags = ["ticket"]
+prompt_tags = true             # a ticket also carries whatever you type
+```
+
+```
+$ selfnotes new ticket login-bug
+Ticket's link: https://example.atlassian.net/browse/INT-42
+Tags (comma-separated): auth,bug/login
+```
+
+```toml
++++
+tags = ["ticket", "auth", "bug/login"]
++++
+```
+
+The answers are appended to the folder's resolved `default_tags`, never in place of them, and they land in the frontmatter like any other tag. Blank entries, repeats, and a leading `#` are all forgiven: `#auth, bug/login,` yields `["auth", "bug/login"]`. An empty answer adds nothing, so the prompt costs one keystroke on a note you do not want to tag. A folder's `prompt_tags` overrides the top-level one in both directions, so `true` at the top level with `false` on a folder quietens that one folder.
+
+`--tag` passes the same tags without being asked, which is what makes a folder that prompts usable from an editor task or a shell alias. It is repeatable and also splits on commas, and giving it at all replaces the prompt, so `--tag ""` creates the entry with no extra tags and no question:
+
+```bash
+selfnotes new ticket login-bug --tag auth --tag bug/login
+selfnotes new ticket login-bug --tag auth,bug/login
+```
+
+The journal never prompts: a daily entry is created the same way whether you type `selfnotes` or a script does, so it takes its tags from `default_tags` alone.
 
 #### Git hashes are not tags
 
@@ -617,6 +654,8 @@ format = "md"
 editor = "nvim"
 # Tags seeded into every new note's frontmatter.
 default_tags = ["me"]
+# Ask `selfnotes new` for extra tags, for every folder that says nothing of its own.
+prompt_tags = false
 # What spaces in a `selfnotes new` name become in the file name (omit to keep them).
 space_replacement = "-"
 # All-hex inline #tokens this long or longer are treated as git hashes, not tags (default 6; 0 disables).
@@ -647,6 +686,8 @@ template_file = "~/.config/selfnotes/templates/ticket.md"
 format = "md"
 # Tickets are also tagged #work.
 default_tags = ["work"]
+# Creating a ticket asks for its own tags, on top of #work.
+prompt_tags = true
 # Replaces the top-level statuses for this folder's entries.
 statuses = ["backlog", "todo", "doing", "staging", "prod"]
 terminal_statuses = ["prod"]
@@ -738,7 +779,7 @@ Priority: {{ticket.priority}}
 Assignee: {{ticket.assignee}}
 ```
 
-Fields are prompted in declaration order by default. An empty answer is allowed, and an unresolved `{{<folder-name>.<field>}}` is left untouched like any other unknown placeholder.
+Fields are prompted in declaration order by default. An empty answer is allowed, and an unresolved `{{<folder-name>.<field>}}` is left untouched like any other unknown placeholder. A folder's `prompt_tags` question comes after every field, since it is about the entry rather than about the template.
 
 To arrange the prompts independently of how the blocks are written, add a `field_order` list on the folder. Names listed there are prompted first, in that order; any field not listed follows in declaration order, and unknown names are ignored:
 
