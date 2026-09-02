@@ -235,8 +235,10 @@ fn write_entry(
         None => default.to_string(),
     };
 
-    let raw = crate::notes::ensure_frontmatter_tags(&raw, default_tags);
+    // Status first: seeding tags re-serializes the frontmatter table, which sorts the keys, so a status already in
+    // place is sorted with them instead of being appended after the block a template laid out.
     let raw = status::seed(&raw, default_status);
+    let raw = crate::notes::ensure_frontmatter_tags(&raw, default_tags);
     let rendered = template::render(&raw, ctx);
 
     std::fs::write(path, &rendered.content).with_context(|| format!("writing entry {}", path.display()))?;
