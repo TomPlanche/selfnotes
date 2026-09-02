@@ -48,6 +48,8 @@ pub const LOCAL_CONFIG_TEMPLATE: &str = "\
 # template_file = \"~/work/templates/ticket.md\"
 # # Added to the `default_tags` above, for this folder's entries only.
 # default_tags = [\"ticket\"]
+# # Ask for extra tags when the entry is created, as one comma-separated line.
+# prompt_tags = true
 # # Overrides the `space_replacement` above, for this folder only.
 # space_replacement = \"_\"
 
@@ -110,6 +112,9 @@ pub struct Config {
     /// Tags seeded into the frontmatter of every new note, on top of any per-source defaults.
     #[serde(default)]
     pub default_tags: Vec<String>,
+    /// Whether `selfnotes new` asks for extra tags on top of the resolved `default_tags`, for every folder that
+    /// declares nothing of its own. Unset means no prompt. The journal never prompts.
+    pub prompt_tags: Option<bool>,
     /// Minimum length of an all-hexadecimal inline `#token` treated as a git hash rather than a tag. `Some(0)`
     /// disables the heuristic; unset uses [`DEFAULT_HASH_TAG_MIN_LEN`].
     pub hash_tag_min_len: Option<usize>,
@@ -268,6 +273,8 @@ pub struct FolderConfig {
     /// Tags seeded into the frontmatter of new entries in this folder, in addition to the global `default_tags`.
     #[serde(default)]
     pub default_tags: Vec<String>,
+    /// Whether creating an entry in this folder asks for extra tags, overriding the top-level `prompt_tags`.
+    pub prompt_tags: Option<bool>,
     /// Statuses this folder's entries move through, in workflow order.
     ///
     /// Unlike `default_tags`, this *replaces* the top-level `statuses` rather than adding to it: a workflow is an
@@ -360,6 +367,10 @@ impl Config {
 
         if !other.default_tags.is_empty() {
             self.default_tags = other.default_tags;
+        }
+
+        if other.prompt_tags.is_some() {
+            self.prompt_tags = other.prompt_tags;
         }
 
         if other.hash_tag_min_len.is_some() {
@@ -544,6 +555,12 @@ impl Config {
         extend_unique(&mut tags, &folder.default_tags);
 
         tags
+    }
+
+    /// Whether creating an entry in `folder` asks for extra tags: the folder's own answer, else the top-level one,
+    /// else no prompt.
+    pub fn folder_prompt_tags(&self, folder: &FolderConfig) -> bool {
+        folder.prompt_tags.or(self.prompt_tags).unwrap_or(false)
     }
 
     /// Statuses `folder`'s entries move through: its own workflow, or the top-level one when it declares none.
@@ -807,6 +824,34 @@ mod tests {
             }],
             ..Config::default()
         }
+    }
+
+    #[test]
+    fn prompt_tags_falls_back_from_the_folder_to_the_top_level() {
+        let plain = FolderConfig {
+            name: "ticket".into(),
+            ..FolderConfig::default()
+        };
+        let opted_out = FolderConfig {
+            prompt_tags: Some(false),
+            ..plain.clone()
+        };
+        let opted_in = FolderConfig {
+            prompt_tags: Some(true),
+            ..plain.clone()
+        };
+
+        let silent = Config::default();
+        let asking = Config {
+            prompt_tags: Some(true),
+            ..Config::default()
+        };
+
+        assert!(!silent.folder_prompt_tags(&plain));
+        assert!(silent.folder_prompt_tags(&opted_in));
+        assert!(asking.folder_prompt_tags(&plain));
+        // A folder saying `false` outranks a top level saying `true`, so one noisy folder can be quietened.
+        assert!(!asking.folder_prompt_tags(&opted_out));
     }
 
     /// A config with a top-level workflow and one folder, so the fallbacks can be exercised.
